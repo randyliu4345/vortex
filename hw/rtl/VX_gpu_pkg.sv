@@ -900,6 +900,14 @@ package VX_gpu_pkg;
         return reg_num[RV_REGS_BITS-1:0];
     endfunction
 
+    /////////////////////////////// KMU data type /////////////////////////////
+    typedef struct packed {
+        logic [`XLEN-1:0]   pc;
+        logic [2:0][31:0]   grid_dim;
+        logic [2:0][31:0]   block_dim;
+        logic [`XLEN-1:0]   param;
+    } kmu_data_t;
+
 endpackage
 
 `IGNORE_UNUSED_END

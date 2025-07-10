@@ -35,6 +35,8 @@ THREADS ?= $(shell python3 -c 'import multiprocessing as mp; print(mp.cpu_count(
 VL_FLAGS += -j $(THREADS)
 #VL_FLAGS += --threads $(THREADS)
 
+DEBUG = 1
+
 # Debugging
 ifdef DEBUG
 	VL_FLAGS += --trace --trace-structs $(DBG_FLAGS)

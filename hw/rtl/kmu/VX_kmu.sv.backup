@@ -1,0 +1,118 @@
+`include "VX_define.vh"
+
+module VX_kmu import VX_gpu_pkg::*; (
+    input wire                              clk,
+    input wire                              reset,
+    input VX_cmd_processor_if.slave         cmd_processor_input,
+    input kmu_data_t                        from_cp,
+    input wire [`NUM_CLUSTERS * `NUM_CORES * `NUM_WARPS - 1 : 0] per_warp_busy,
+    output wire [`NUM_CLUSTERS * `NUM_CORES * `NUM_WARPS - 1 : 0] per_warp_valid,
+    output wire [`NUM_CLUSTERS * `NUM_CORES * `NUM_WARPS - 1 : 0][31:0] per_warp_task,
+    output wire [`NUM_CLUSTERS * `NUM_CORES * `NUM_WARPS - 1 : 0][`XLEN-1:0] per_warp_pc,
+    output VX_kmu_task_if.master            task_interface
+);
+/* verilator public_module */
+assign task_interface.valid = '0;
+assign task_interface.num_warps = '0;
+assign task_interface.start_pc = '0;
+assign task_interface.cta_x = '0;
+assign task_interface.cta_y = '0;
+assign task_interface.cta_z = '0;
+assign task_interface.cta_id = '0;
+
+
+// All the internal signals are for the testing purpose
+// wire [`CLOG2(32+1)-1:0] internal_size/* verilator public */;
+wire internal_empty/* verilator public */;
+
+reg pop/* verilator public*/;
+
+logic [31:0] num_threads/*verilator public*/;
+logic [31:0] num_warps/*verilator public*/;
+// `UNUSED_VAR(num_threads);
+// `UNUSED_VAR(num_warps);
+
+wire internal_ready;
+
+kmu_data_t kmu_data;
+`UNUSED_VAR(kmu_data.param);
+
+VX_fifo_queue #(
+    .DATAW (2 * `XLEN + 32*6)
+) fifo (
+    .clk                    (clk),
+    .reset                  (reset),
+    .push                   (cmd_processor_input.valid), // assume new_task is off when full
+    .pop                    (pop),
+    .data_in                (from_cp),
+    .data_out               (kmu_data),
+    .empty                  (internal_empty),
+    .alm_empty              ('x),
+    .full                   (internal_ready),
+    .alm_full               ('x),
+    .size                   ('x)
+);
+
+assign cmd_processor_input.ready = ~internal_ready;
+
+reg[31:0] work_distributed/* verilator public */;
+// `UNUSED_VAR(work_distributed);
+
+integer next_distribute;
+integer i;
+always_comb begin
+    // Calculate how many threads in total
+    num_threads = `MAX(kmu_data.grid_dim[0], 1) * `MAX(kmu_data.grid_dim[1], 1) * 
+                    `MAX(kmu_data.grid_dim[2], 1) * `MAX(kmu_data.block_dim[0], 1) *
+                    `MAX(kmu_data.block_dim[1], 1) * `MAX(kmu_data.block_dim[2], 1);
+
+    // Calculate how many cta warps in total
+    num_warps = num_threads / `NUM_THREADS;
+    if (num_threads - num_warps * `NUM_THREADS > 0) begin
+        num_warps++;
+    end
+
+    // plan to distribute tasks (commit it in the sequential logic)
+    next_distribute = work_distributed;
+    for (i = 0; i < `NUM_CLUSTERS * `NUM_CORES * `NUM_WARPS; i++) begin
+        if(!per_warp_busy[i] && next_distribute < num_warps && !internal_empty && !reset) begin
+            // the logic to assign the task
+            per_warp_pc[i] = kmu_data.pc;
+            per_warp_valid[i] = 1'b1;
+            per_warp_task[i] = next_distribute;
+            next_distribute++;
+        end else begin
+            per_warp_pc[i] = 0;
+            per_warp_valid[i] = 1'b0;
+            per_warp_task[i] = '0;
+        end
+    end
+
+    if (next_distribute >= num_warps && !internal_empty) begin
+        pop = 1'b1;
+    end else begin
+        pop = 1'b0;
+    end
+end
+
+always_ff @(posedge clk)
+begin
+    if (reset) begin
+        work_distributed <= 0;
+    end else if (pop) begin
+        work_distributed <= 0;
+        `TRACE(0, ("[KMU] FIFO has been poped\n"));
+    end else if (!internal_empty) begin  // Guard to make sure only distribute task when there is valid work
+        work_distributed <= next_distribute;
+    end
+
+    // `TRACE(0, ("[KMU] number of total warps: %d\n", num_warps));
+    // `TRACE(0, ("[KMU] the next_distribute: %d\n", next_distribute));
+    // `TRACE(0, ("[KMU] the work_distributed: %d\n", work_distributed));
+end
+
+// always @ (posedge clk) begin
+//     `TRACE(0, ("KMU, the new_task value: %h \n", cmd_processor_input.new_task));
+//     `TRACE(0, ("KMU, new_task: %b, reset: %b\n", internal_new_task, reset));
+// end
+endmodule
