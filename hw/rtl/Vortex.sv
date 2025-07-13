@@ -44,6 +44,21 @@ module Vortex import VX_gpu_pkg::*; (
     output wire                             busy
 );
 
+wire start;
+`UNUSED_VAR(start);
+
+VX_kmu_task_if task_interface[`NUM_CLUSTERS * `NUM_CORES]();
+
+VX_kmu kmu(
+    .clk (clk),
+    .reset (reset),
+    .dcr_wr_valid (dcr_wr_valid),
+    .dcr_wr_addr (dcr_wr_addr),
+    .dcr_wr_data (dcr_wr_data),
+    .task_interface (task_interface),
+    .start (start)
+);
+
 `ifdef SCOPE
     localparam scope_cluster = 0;
     `SCOPE_IO_SWITCH (`NUM_CLUSTERS);

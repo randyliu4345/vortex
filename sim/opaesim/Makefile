@@ -51,6 +51,8 @@ endif
 RTL_INCLUDE = -I$(SRC_DIR) -I$(RTL_DIR) -I$(DPI_DIR) -I$(RTL_DIR)/libs -I$(RTL_DIR)/interfaces -I$(RTL_DIR)/core -I$(RTL_DIR)/mem -I$(RTL_DIR)/cache $(FPU_INCLUDE)
 RTL_INCLUDE += -I$(AFU_DIR) -I$(AFU_DIR)/ccip
 
+RTL_INCLUDE += -I$(RTL_DIR)/kmu
+
 # Add V extension sources
 ifneq (,$(findstring -DEXT_V_ENABLE, $(CONFIGS)))
 	RTL_PKGS += $(RTL_DIR)/vpu/VX_vpu_pkg.sv

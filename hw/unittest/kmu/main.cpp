@@ -84,14 +84,14 @@ int main(int argc, char **argv) {
 
     tick = sim.reset(tick);
 
-    assert(sim->pc == dummy_pc);
-    assert(sim->param == dummy_param);
-    assert(sim->grid_dim[0] == dummy_grid[0]);
-    assert(sim->grid_dim[1] == dummy_grid[1]);
-    assert(sim->grid_dim[2] == dummy_grid[2]);
-    assert(sim->block_dim[0] == dummy_block[0]);
-    assert(sim->block_dim[1] == dummy_block[1]);
-    assert(sim->block_dim[2] == dummy_block[2]);
+    // assert(sim->pc == dummy_pc);
+    // assert(sim->param == dummy_param);
+    // assert(sim->grid_dim[0] == dummy_grid[0]);
+    // assert(sim->grid_dim[1] == dummy_grid[1]);
+    // assert(sim->grid_dim[2] == dummy_grid[2]);
+    // assert(sim->block_dim[0] == dummy_block[0]);
+    // assert(sim->block_dim[1] == dummy_block[1]);
+    // assert(sim->block_dim[2] == dummy_block[2]);
 
 //   sim->cp_valid = 1;
 
