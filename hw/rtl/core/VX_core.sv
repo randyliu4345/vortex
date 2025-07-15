@@ -41,6 +41,9 @@ module VX_core import VX_gpu_pkg::*; #(
     VX_gbar_bus_if.master   gbar_bus_if,
 `endif
 
+    // tasks
+    VX_kmu_task_if.slave    kmu_task_if,
+
     // Status
     output wire             busy
 );
@@ -113,6 +116,8 @@ module VX_core import VX_gpu_pkg::*; #(
         .gbar_bus_if    (gbar_bus_if),
     `endif
         .sched_csr_if   (sched_csr_if),
+
+        .kmu_task_if    (kmu_task_if),
 
         .busy           (busy)
     );

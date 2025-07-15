@@ -41,6 +41,9 @@ module VX_schedule import VX_gpu_pkg::*; #(
 `endif
     VX_sched_csr_if.master  sched_csr_if,
 
+    // task
+    VX_kmu_task_if.slave    kmu_task_if,
+
     // status
     output wire             busy
 );

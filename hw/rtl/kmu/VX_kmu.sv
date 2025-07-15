@@ -16,6 +16,9 @@ module VX_kmu import VX_gpu_pkg::*; (
 );
 
     kmu_data_t kmu_data;
+    logic[31:0] smem_size = 0;
+
+    `UNUSED_VAR(smem_size);
 
     logic[31:0] cta_x[`NUM_CLUSTERS * `NUM_CORES];
     logic[31:0] cta_y[`NUM_CLUSTERS * `NUM_CORES];
@@ -49,6 +52,8 @@ module VX_kmu import VX_gpu_pkg::*; (
     logic[31:0] cur_z;
     logic[31:0] cur_id;
 
+    logic[`NUM_THREADS-1:0] tmask_v;
+
     always_comb begin
         total_threads = `MAX(kmu_data.block_dim[0], 1) 
                         * `MAX(kmu_data.block_dim[1], 1) 
@@ -58,6 +63,13 @@ module VX_kmu import VX_gpu_pkg::*; (
 
         if (total_warps * `NUM_THREADS < total_threads) begin
             total_warps++;
+        end
+
+        if (total_warps * `NUM_THREADS == total_threads) begin
+            tmask_v = {`NUM_THREADS{1'b1}};
+        end else begin
+            tmask_v = {`NUM_THREADS{1'b1}};
+            tmask_v = tmask_v << (total_warps * `NUM_THREADS - total_threads);
         end
 
 
@@ -148,6 +160,9 @@ module VX_kmu import VX_gpu_pkg::*; (
                 `VX_DCR_BASE_BLOCK_DIM2: begin
                     kmu_data.block_dim[2] <= dcr_wr_data;
                 end
+                `VX_DCR_BASE_SMEM_SIZE: begin
+                    smem_size <= dcr_wr_data;
+                end
 
                 default: begin
                     // `ASSERT(0, ("%t: invalid DCR write address: %0h", $time, dcr_bus_if.write_addr));
@@ -156,6 +171,12 @@ module VX_kmu import VX_gpu_pkg::*; (
         end
 
         start <= reset;
+
+        if (smem_size != 0) begin
+            if (total_threads <= `NUM_CLUSTERS * `NUM_CORES * `NUM_THREADS) begin
+                `ASSERT(0, ("cannot use shared memory since the cta size is smaller than total hardware threads\n"));
+            end
+        end
     end
 
 endmodule

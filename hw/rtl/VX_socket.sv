@@ -37,6 +37,10 @@ module VX_socket import VX_gpu_pkg::*; #(
     // Barrier
     VX_gbar_bus_if.master   gbar_bus_if,
 `endif
+
+    // task
+    VX_kmu_task_if.slave    kmu_task_if[`SOCKET_SIZE],
+
     // Status
     output wire             busy
 );
@@ -245,6 +249,8 @@ module VX_socket import VX_gpu_pkg::*; #(
         `ifdef GBAR_ENABLE
             .gbar_bus_if    (per_core_gbar_bus_if[core_id]),
         `endif
+
+            .kmu_task_if    (kmu_task_if[core_id]),
 
             .busy           (per_core_busy[core_id])
         );

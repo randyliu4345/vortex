@@ -31,7 +31,8 @@
 `define VX_DCR_BASE_BLOCK_DIM0          12'h009
 `define VX_DCR_BASE_BLOCK_DIM1          12'h00A
 `define VX_DCR_BASE_BLOCK_DIM2          12'h00B
-`define VX_DCR_BASE_STATE_END           12'h00C
+`define VX_DCR_BASE_SMEM_SIZE           12'h00C
+`define VX_DCR_BASE_STATE_END           12'h00D
 
 `define VX_DCR_BASE_STATE(addr)         ((addr) - `VX_DCR_BASE_STATE_BEGIN)
 `define VX_DCR_BASE_STATE_COUNT         (`VX_DCR_BASE_STATE_END-`VX_DCR_BASE_STATE_BEGIN)

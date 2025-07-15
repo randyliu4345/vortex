@@ -33,6 +33,9 @@ module VX_cluster import VX_gpu_pkg::*; #(
     // Memory
     VX_mem_bus_if.master        mem_bus_if [`L2_MEM_PORTS],
 
+    // task
+    VX_kmu_task_if.slave        kmu_task_if[`NUM_CORES],
+
     // Status
     output wire                 busy
 );
@@ -148,6 +151,8 @@ module VX_cluster import VX_gpu_pkg::*; #(
         `ifdef GBAR_ENABLE
             .gbar_bus_if    (per_socket_gbar_bus_if[socket_id]),
         `endif
+
+            .kmu_task_if    (kmu_task_if[socket_id * `SOCKET_SIZE +: `SOCKET_SIZE]),
 
             .busy           (per_socket_busy[socket_id])
         );

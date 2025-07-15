@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
   int dummy_pc = 0x12345678;
   int dummy_param = 0x87654321;
   int dummy_grid[3] = {1, 2, 3};
-  int dummy_block[3] = {4, 5, 6};
+  int dummy_block[3] = {5, 5, 6};
 
 //   sim->cp_valid = 0;
 
@@ -81,6 +81,7 @@ int main(int argc, char **argv) {
     tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM1, dummy_block[1], tick);
     tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM2, dummy_block[2], tick);
     tick = write_dcr(sim, VX_DCR_BASE_STARTUP_ARG0, dummy_param, tick);
+    tick = write_dcr(sim, VX_DCR_BASE_SMEM_SIZE, 0, tick);
 
     tick = sim.reset(tick);
 

@@ -169,6 +169,8 @@ VX_kmu kmu(
 
             .mem_bus_if         (per_cluster_mem_bus_if[cluster_id * `L2_MEM_PORTS +: `L2_MEM_PORTS]),
 
+            .kmu_task_if        (task_interface[cluster_id * `NUM_CORES +:`NUM_CORES]),
+
             .busy               (per_cluster_busy[cluster_id])
         );
     end
