@@ -222,4 +222,23 @@
 `define VX_CSR_NUM_CORES                12'hFC2
 `define VX_CSR_LOCAL_MEM_BASE           12'hFC3
 
+// Raster Units ///////////////////////////////////////////////////////////////
+
+`define VX_RASTER_DIM_BITS              15
+`define VX_RASTER_STRIDE_BITS           16
+`define VX_RASTER_PID_BITS              16
+`define VX_RASTER_TILECNT_BITS          (2 * (`VX_RASTER_DIM_BITS - `VX_RASTER_TILE_LOGSIZE) + 1)
+
+`define VX_DCR_RASTER_STATE_BEGIN       `VX_DCR_TEX_STATE_END
+`define VX_DCR_RASTER_TBUF_ADDR         (`VX_DCR_RASTER_STATE_BEGIN+0)
+`define VX_DCR_RASTER_TILE_COUNT        (`VX_DCR_RASTER_STATE_BEGIN+1)
+`define VX_DCR_RASTER_PBUF_ADDR         (`VX_DCR_RASTER_STATE_BEGIN+2)
+`define VX_DCR_RASTER_PBUF_STRIDE       (`VX_DCR_RASTER_STATE_BEGIN+3)
+`define VX_DCR_RASTER_SCISSOR_X         (`VX_DCR_RASTER_STATE_BEGIN+4)
+`define VX_DCR_RASTER_SCISSOR_Y         (`VX_DCR_RASTER_STATE_BEGIN+5)
+`define VX_DCR_RASTER_STATE_END         (`VX_DCR_RASTER_STATE_BEGIN+6)
+
+`define VX_DCR_RASTER_STATE(addr)       ((addr) - `VX_DCR_RASTER_STATE_BEGIN)
+`define VX_DCR_RASTER_STATE_COUNT       (`VX_DCR_RASTER_STATE_END-`VX_DCR_RASTER_STATE_BEGIN)
+
 `endif // VX_TYPES_VH

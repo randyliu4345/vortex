@@ -22,6 +22,7 @@ interface VX_kmu_task_if();
 
     assign kmu_valid = '0;
     assign core_ready = 1;
+    assign task_data = '0;
 
     ////////////// sm to kmu ///////////////////////
 

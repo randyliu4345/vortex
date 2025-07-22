@@ -38,12 +38,24 @@ module VX_socket import VX_gpu_pkg::*; #(
     VX_gbar_bus_if.master   gbar_bus_if,
 `endif
 
-    // task
-    VX_kmu_task_if.slave    kmu_task_if[`SOCKET_SIZE],
-
     // Status
-    output wire             busy
+    output wire             busy,
+
+    // Distributed task
+    VX_raster_bus_if.slave      task_in[1]
 );
+
+    VX_raster_bus_if task_out[`SOCKET_SIZE]();
+
+    VX_raster_arb #(
+            .NUM_INPUTS (1),
+            .NUM_OUTPUTS (`SOCKET_SIZE)
+    ) socket_arb (
+            .clk        (clk),
+            .reset      (reset),
+            .bus_in_if  (task_in), // pass array directly
+            .bus_out_if (task_out[`SOCKET_SIZE-1:0])
+    );
 
 `ifdef SCOPE
     localparam scope_core = 0;
@@ -250,9 +262,9 @@ module VX_socket import VX_gpu_pkg::*; #(
             .gbar_bus_if    (per_core_gbar_bus_if[core_id]),
         `endif
 
-            .kmu_task_if    (kmu_task_if[core_id]),
+            .busy           (per_core_busy[core_id]),
 
-            .busy           (per_core_busy[core_id])
+            .task_in        (task_out[core_id +: 1])
         );
     end
 

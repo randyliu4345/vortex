@@ -33,12 +33,25 @@ module VX_cluster import VX_gpu_pkg::*; #(
     // Memory
     VX_mem_bus_if.master        mem_bus_if [`L2_MEM_PORTS],
 
-    // task
-    VX_kmu_task_if.slave        kmu_task_if[`NUM_CORES],
-
     // Status
-    output wire                 busy
+    output wire                 busy,
+
+    // Distributed task
+    VX_raster_bus_if.slave      task_in[1]
 );
+
+    VX_raster_bus_if task_out[NUM_SOCKETS]();
+
+    VX_raster_arb #(
+            .NUM_INPUTS (1),
+            .NUM_OUTPUTS (NUM_SOCKETS)
+    ) socket_arb (
+            .clk        (clk),
+            .reset      (reset),
+            .bus_in_if  (task_in), // pass array directly
+            .bus_out_if (task_out[NUM_SOCKETS-1:0])
+    );
+
 
 `ifdef SCOPE
     localparam scope_socket = 0;
@@ -152,9 +165,9 @@ module VX_cluster import VX_gpu_pkg::*; #(
             .gbar_bus_if    (per_socket_gbar_bus_if[socket_id]),
         `endif
 
-            .kmu_task_if    (kmu_task_if[socket_id * `SOCKET_SIZE +: `SOCKET_SIZE]),
+            .busy           (per_socket_busy[socket_id]),
 
-            .busy           (per_socket_busy[socket_id])
+            .task_in        (task_out[socket_id +: 1])
         );
     end
 
