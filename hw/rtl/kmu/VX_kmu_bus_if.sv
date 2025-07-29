@@ -13,18 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-`include "VX_raster_define.vh"
+typedef struct packed {
+    logic[31:0]          num_warps;
+    logic[`XLEN-1:0]     start_pc;
+    logic[`XLEN-1:0]     param;
+    logic[31:0]          cta_x;
+    logic[31:0]          cta_y;
+    logic[31:0]          cta_z;
+    logic[31:0]          cta_id;
+    logic[`NUM_THREADS-1:0] remain_mask;
+} kmu_req_data_t;
 
-interface VX_raster_bus_if import VX_raster_pkg::*; #(
+interface VX_kmu_bus_if #(
     parameter NUM_LANES = 1
 ) ();
-    typedef struct packed {
-        raster_stamp_t [NUM_LANES-1:0]  stamps;
-        logic                           done;
-    } req_data_t;
+    `UNUSED_PARAM(NUM_LANES);
 
     logic       req_valid;
-    req_data_t  req_data;
+    kmu_req_data_t  req_data;
     logic       req_ready;
 
     modport master (

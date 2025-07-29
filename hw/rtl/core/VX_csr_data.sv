@@ -55,6 +55,11 @@ import VX_fpu_pkg::*;
     input wire [`NUM_WARPS-1:0]         active_warps,
     input wire [`NUM_WARPS-1:0][`NUM_THREADS-1:0] thread_masks,
 
+    input wire [`NUM_WARPS-1:0][31:0]   cta_x,
+    input wire [`NUM_WARPS-1:0][31:0]   cta_y,
+    input wire [`NUM_WARPS-1:0][31:0]   cta_z,
+    input wire [`NUM_WARPS-1:0][31:0]   cta_id,
+
     input wire                          read_enable,
     input wire [UUID_WIDTH-1:0]         read_uuid,
     input wire [NW_WIDTH-1:0]           read_wid,
@@ -72,6 +77,11 @@ import VX_fpu_pkg::*;
     `UNUSED_VAR (reset)
     `UNUSED_VAR (write_wid)
     `UNUSED_VAR (write_data)
+
+    `UNUSED_VAR(cta_x)
+    `UNUSED_VAR(cta_y)
+    `UNUSED_VAR(cta_z)
+    `UNUSED_VAR(cta_id)
 
     // CSRs Write /////////////////////////////////////////////////////////////
 

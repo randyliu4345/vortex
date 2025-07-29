@@ -11,7 +11,7 @@ module VX_kmu import VX_gpu_pkg::*; (
 
     output reg start,
 
-    VX_raster_bus_if.master                 raster_bus_out[1]
+    VX_kmu_bus_if.master                 kmu_bus_out[1]
 );
 
     // Configuration data
@@ -26,8 +26,11 @@ module VX_kmu import VX_gpu_pkg::*; (
     logic[31:0] total_threads;
     logic[31:0] total_warps;
 
-    // State for raster bus handshake
+    // State for kmu bus handshake
     logic all_cta_sent;
+
+    // the remaining mask
+    logic[`NUM_THREADS-1:0] remain_mask;
 
     // Calculate total threads and warps
     always_comb begin
@@ -36,8 +39,16 @@ module VX_kmu import VX_gpu_pkg::*; (
                       * `MAX(kmu_data.block_dim[2], 1);
 
         total_warps = total_threads / `NUM_THREADS;
-        if (total_warps * `NUM_THREADS < total_threads)
+        if (total_warps * `NUM_THREADS < total_threads) begin
             total_warps++;
+        end
+
+        if (total_warps * `NUM_THREADS == total_threads) begin
+            remain_mask = {`NUM_THREADS{1'b1}};
+        end else begin
+            remain_mask = {`NUM_THREADS{1'b1}};
+            remain_mask = remain_mask << (total_warps * `NUM_THREADS - total_threads);
+        end
     end
 
     // DCR write logic
@@ -77,18 +88,19 @@ module VX_kmu import VX_gpu_pkg::*; (
             counter_z    <= 0;
             counter_id   <= 0;
             all_cta_sent <= 0;
-            raster_bus_out[0].req_valid <= 0;
+            kmu_bus_out[0].req_valid <= 0;
         end else begin
-            if (!all_cta_sent && raster_bus_out[0].req_ready) begin
+            if (!all_cta_sent && kmu_bus_out[0].req_ready) begin
                 // Prepare and send one CTA block
-                raster_bus_out[0].req_data.stamps[0].num_warps <= total_warps;
-                raster_bus_out[0].req_data.stamps[0].start_pc  <= kmu_data.pc;
-                raster_bus_out[0].req_data.stamps[0].param     <= kmu_data.param;
-                raster_bus_out[0].req_data.stamps[0].cta_x     <= counter_x;
-                raster_bus_out[0].req_data.stamps[0].cta_y     <= counter_y;
-                raster_bus_out[0].req_data.stamps[0].cta_z     <= counter_z;
-                raster_bus_out[0].req_data.stamps[0].cta_id    <= counter_id;
-                raster_bus_out[0].req_valid <= 1;
+                kmu_bus_out[0].req_data.num_warps <= total_warps;
+                kmu_bus_out[0].req_data.start_pc  <= kmu_data.pc;
+                kmu_bus_out[0].req_data.param     <= kmu_data.param;
+                kmu_bus_out[0].req_data.cta_x     <= counter_x;
+                kmu_bus_out[0].req_data.cta_y     <= counter_y;
+                kmu_bus_out[0].req_data.cta_z     <= counter_z;
+                kmu_bus_out[0].req_data.cta_id    <= counter_id;
+                kmu_bus_out[0].req_data.remain_mask    <= remain_mask;
+                kmu_bus_out[0].req_valid <= 1;
 
                 // Advance to next CTA block
                 counter_z  <= counter_z + 1;
@@ -105,7 +117,7 @@ module VX_kmu import VX_gpu_pkg::*; (
                     end
                 end
             end else begin
-                raster_bus_out[0].req_valid <= 0;
+                kmu_bus_out[0].req_valid <= 0;
             end
         end
     end

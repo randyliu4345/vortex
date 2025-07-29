@@ -37,12 +37,12 @@ module VX_cluster import VX_gpu_pkg::*; #(
     output wire                 busy,
 
     // Distributed task
-    VX_raster_bus_if.slave      task_in[1]
+    VX_kmu_bus_if.slave      task_in[1]
 );
 
-    VX_raster_bus_if task_out[NUM_SOCKETS]();
+    VX_kmu_bus_if task_out[NUM_SOCKETS]();
 
-    VX_raster_arb #(
+    VX_kmu_arb #(
             .NUM_INPUTS (1),
             .NUM_OUTPUTS (NUM_SOCKETS)
     ) socket_arb (

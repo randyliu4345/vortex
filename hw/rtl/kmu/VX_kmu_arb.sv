@@ -13,9 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-`include "VX_raster_define.vh"
-
-module VX_raster_arb import VX_raster_pkg::*; #(
+module VX_kmu_arb #(
     parameter NUM_INPUTS     = 1,
     parameter NUM_OUTPUTS    = 1,
     parameter NUM_LANES      = 1,
@@ -26,12 +24,12 @@ module VX_raster_arb import VX_raster_pkg::*; #(
     input wire              reset,
 
     // input request
-    VX_raster_bus_if.slave  bus_in_if [NUM_INPUTS],
+    VX_kmu_bus_if.slave  bus_in_if [NUM_INPUTS],
 
     // output requests
-    VX_raster_bus_if.master bus_out_if [NUM_OUTPUTS]
+    VX_kmu_bus_if.master bus_out_if [NUM_OUTPUTS]
 );
-    localparam REQ_DATAW = NUM_LANES * $bits(raster_stamp_t) + 1;
+    localparam REQ_DATAW = NUM_LANES * $bits(kmu_req_data_t);
 
     wire [NUM_INPUTS-1:0]                 req_valid_in;
     wire [NUM_INPUTS-1:0][REQ_DATAW-1:0]  req_data_in;
@@ -41,15 +39,9 @@ module VX_raster_arb import VX_raster_pkg::*; #(
     wire [NUM_OUTPUTS-1:0][REQ_DATAW-1:0] req_data_out;
     wire [NUM_OUTPUTS-1:0]                req_ready_out;
 
-    wire [NUM_INPUTS-1:0] done_mask;
-    for (genvar i = 0; i < NUM_INPUTS; ++i) begin : g_raster_done_mask
-        assign done_mask[i] = bus_in_if[i].req_data.done;
-    end
-    wire done_all = (& done_mask);
-
     for (genvar i = 0; i < NUM_INPUTS; ++i) begin : g_raster_req_valid
         assign req_valid_in[i] = bus_in_if[i].req_valid;
-        assign req_data_in[i]  = {bus_in_if[i].req_data.stamps, done_all};
+        assign req_data_in[i]  = bus_in_if[i].req_data;
         assign bus_in_if[i].req_ready = req_ready_in[i];
     end
 
@@ -73,7 +65,7 @@ module VX_raster_arb import VX_raster_pkg::*; #(
 
     for (genvar i = 0; i < NUM_OUTPUTS; ++i) begin : g_raster_bus_out
         assign bus_out_if[i].req_valid = req_valid_out[i];
-        assign {bus_out_if[i].req_data.stamps, bus_out_if[i].req_data.done} = req_data_out[i];
+        assign bus_out_if[i].req_data = req_data_out[i];
         assign req_ready_out[i] = bus_out_if[i].req_ready;
     end
 

@@ -45,7 +45,7 @@ module VX_core import VX_gpu_pkg::*; #(
     output wire             busy,
 
     // Distributed task
-    VX_raster_bus_if.slave      task_in[1]
+    VX_kmu_bus_if.slave      task_in[1]
 );
     VX_schedule_if      schedule_if();
     VX_fetch_if         fetch_if();
@@ -117,7 +117,8 @@ module VX_core import VX_gpu_pkg::*; #(
     `endif
         .sched_csr_if   (sched_csr_if),
 
-        .busy           (busy)
+        .busy           (busy),
+        .task_in        (task_in[0])
     );
 
     VX_fetch #(

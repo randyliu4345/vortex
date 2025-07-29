@@ -47,8 +47,8 @@ module Vortex import VX_gpu_pkg::*; (
 wire start;
 `UNUSED_VAR(start);
 
-VX_raster_bus_if raster_bus_in[1]();
-VX_raster_bus_if raster_bus_out[`NUM_CLUSTERS]();
+VX_kmu_bus_if kmu_bus_in[1]();
+VX_kmu_bus_if kmu_bus_out[`NUM_CLUSTERS]();
 
 VX_kmu kmu(
     .clk (clk),
@@ -57,7 +57,7 @@ VX_kmu kmu(
     .dcr_wr_addr (dcr_wr_addr),
     .dcr_wr_data (dcr_wr_data),
     .start (start),
-    .raster_bus_out (raster_bus_in) // <-- add this line
+    .kmu_bus_out (kmu_bus_in) // <-- add this line
 );
 
 `ifdef SCOPE
@@ -145,14 +145,14 @@ VX_kmu kmu(
 
     wire [`NUM_CLUSTERS-1:0] per_cluster_busy;
 
-    VX_raster_arb #(
+    VX_kmu_arb #(
         .NUM_INPUTS (1),
         .NUM_OUTPUTS (`NUM_CLUSTERS)
     ) cluster_arb (
         .clk        (clk),
         .reset      (reset),
-        .bus_in_if  (raster_bus_in),
-        .bus_out_if (raster_bus_out[`NUM_CLUSTERS-1:0])
+        .bus_in_if  (kmu_bus_in),
+        .bus_out_if (kmu_bus_out[`NUM_CLUSTERS-1:0])
     );
 
     // Generate all clusters
@@ -181,7 +181,7 @@ VX_kmu kmu(
             .mem_bus_if         (per_cluster_mem_bus_if[cluster_id * `L2_MEM_PORTS +: `L2_MEM_PORTS]),
 
             .busy               (per_cluster_busy[cluster_id]),
-            .task_in            (raster_bus_out[cluster_id +: 1])
+            .task_in            (kmu_bus_out[cluster_id +: 1])
         );
     end
 

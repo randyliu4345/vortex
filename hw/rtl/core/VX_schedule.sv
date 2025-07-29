@@ -42,7 +42,10 @@ module VX_schedule import VX_gpu_pkg::*; #(
     VX_sched_csr_if.master  sched_csr_if,
 
     // status
-    output wire             busy
+    output wire             busy,
+
+    // Distributed task
+    VX_kmu_bus_if.slave     task_in
 );
     `UNUSED_SPARAM (INSTANCE_ID)
     `UNUSED_PARAM (CORE_ID)
@@ -71,6 +74,22 @@ module VX_schedule import VX_gpu_pkg::*; #(
 
     wire schedule_fire = schedule_valid && schedule_ready;
     wire schedule_if_fire = schedule_if.valid && schedule_if.ready;
+
+    VX_cta_dispatch cta_dispatcher(
+        .clk    (clk),
+        .reset  (reset),
+        .task_in        (task_in),
+        .active_warps   ('0),
+        .num_warps      ('0),
+        .sched_warps    ('x),
+        .cta_x          (sched_csr_if.cta_x),
+        .cta_y          (sched_csr_if.cta_y),
+        .cta_z          (sched_csr_if.cta_z),
+        .cta_id         (sched_csr_if.cta_id),
+        .pc             ('x),
+        .param          ('x),
+        .remain_masks   ('x)
+    );
 
     // branch
     wire [`NUM_ALU_BLOCKS-1:0]               branch_valid;
