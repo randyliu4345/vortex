@@ -247,8 +247,18 @@ module VX_schedule import VX_gpu_pkg::*; #(
 
             // activate first warp
             warp_pcs[0]     <= from_fullPC(base_dcrs.startup_addr);
+            warp_pcs[1]     <= from_fullPC(base_dcrs.startup_addr);
+            warp_pcs[2]     <= from_fullPC(base_dcrs.startup_addr);
+            warp_pcs[3]     <= from_fullPC(base_dcrs.startup_addr);
             active_warps[0] <= 1;
+            active_warps[1] <= 1;
+            active_warps[2] <= 1;
+            active_warps[3] <= 1;
             thread_masks[0][0] <= 1;
+            thread_masks[0][1] <= 1;
+            thread_masks[1][0] <= 1;
+            thread_masks[2][0] <= 1;
+            thread_masks[3][0] <= 1;
             is_single_warp  <= 1;
         end else begin
             active_warps   <= active_warps_n;

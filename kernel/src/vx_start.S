@@ -22,24 +22,10 @@
 _start:
 
   # initialize per-thread registers
-  csrr  t0, VX_CSR_NUM_WARPS  # get num warps
-  la    t1, init_regs_all
-  .insn r RISCV_CUSTOM0, 1, 0, x0, t0, t1  # wspawn t0, t1
-  li    t0, -1
-  .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
   jal   init_regs
-  li    t0, 1
-  .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
 
   # initialize TLS for all warps
-  csrr  t0, VX_CSR_NUM_WARPS  # get num warps
-  la    t1, init_tls_all
-  .insn r RISCV_CUSTOM0, 1, 0, x0, t0, t1  # wspawn t0, t1
-  li    t0, -1
-  .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
   call  __init_tls
-  li    t0, 1
-  .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
 
   # clear BSS segment
   la    a0, _edata
