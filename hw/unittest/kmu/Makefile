@@ -18,7 +18,7 @@ DBG_TRACE_FLAGS := -DDBG_TRACE_CACHE
 
 RTL_PKGS := $(RTL_DIR)/VX_gpu_pkg.sv $(RTL_DIR)/fpu/VX_fpu_pkg.sv
 
-RTL_INCLUDE := -I$(RTL_DIR) -I$(DPI_DIR) -I$(RTL_DIR)/libs -I$(RTL_DIR)/kmu
+RTL_INCLUDE := -I$(RTL_DIR) -I$(DPI_DIR) -I$(RTL_DIR)/libs -I$(RTL_DIR)/kmu -I$(VORTEX_HOME)/hw/unittest/kmu
 RTL_INCLUDE += -I$(RTL_DIR)/interfaces -I$(RTL_DIR)/mem -I$(RTL_DIR)/fpu -I$(RTL_DIR)/core
 
 TOP := VX_kmu_top

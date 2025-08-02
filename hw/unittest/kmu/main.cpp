@@ -46,17 +46,17 @@ void sim_trace_enable(bool enable) {
   trace_enabled = enable;
 }
 
-template <typename T>
-int write_dcr(vl_simulator<T>& sim, const int addr, const int value, int tick) {
-    sim->dcr_wr_valid = 1;
-    sim->dcr_wr_addr = addr;
-    sim->dcr_wr_data = value;
+// template <typename T>
+// int write_dcr(vl_simulator<T>& sim, const int addr, const int value, int tick) {
+//     sim->dcr_wr_valid = 1;
+//     sim->dcr_wr_addr = addr;
+//     sim->dcr_wr_data = value;
 
-    tick = sim.step(tick, 2);
-    sim->dcr_wr_valid = 0;
+//     tick = sim.step(tick, 2);
+//     sim->dcr_wr_valid = 0;
 
-    return tick;
-}
+//     return tick;
+// }
 
 int main(int argc, char **argv) {
   // Initialize Verilators variables
@@ -65,23 +65,23 @@ int main(int argc, char **argv) {
   vl_simulator<VVX_kmu_top> sim;
   int tick = 0;
 
-  int dummy_pc = 0x12345678;
-  int dummy_param = 0x87654321;
-  int dummy_grid[3] = {1, 2, 3};
-  int dummy_block[3] = {5, 5, 6};
+  // int dummy_pc = 0x12345678;
+  // int dummy_param = 0x87654321;
+  // int dummy_grid[3] = {1, 2, 3};
+  // int dummy_block[3] = {5, 5, 6};
 
 //   sim->cp_valid = 0;
 
 
-    tick = write_dcr(sim, VX_DCR_BASE_STARTUP_ADDR0, dummy_pc, tick);
-    tick = write_dcr(sim, VX_DCR_BASE_GRID_DIM0, dummy_grid[0], tick);
-    tick = write_dcr(sim, VX_DCR_BASE_GRID_DIM1, dummy_grid[1], tick);
-    tick = write_dcr(sim, VX_DCR_BASE_GRID_DIM2, dummy_grid[2], tick);
-    tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM0, dummy_block[0], tick);
-    tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM1, dummy_block[1], tick);
-    tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM2, dummy_block[2], tick);
-    tick = write_dcr(sim, VX_DCR_BASE_STARTUP_ARG0, dummy_param, tick);
-    tick = write_dcr(sim, VX_DCR_BASE_SMEM_SIZE, 0, tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_STARTUP_ADDR0, dummy_pc, tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_GRID_DIM0, dummy_grid[0], tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_GRID_DIM1, dummy_grid[1], tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_GRID_DIM2, dummy_grid[2], tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM0, dummy_block[0], tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM1, dummy_block[1], tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_BLOCK_DIM2, dummy_block[2], tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_STARTUP_ARG0, dummy_param, tick);
+    // tick = write_dcr(sim, VX_DCR_BASE_SMEM_SIZE, 0, tick);
 
     tick = sim.reset(tick);
 
