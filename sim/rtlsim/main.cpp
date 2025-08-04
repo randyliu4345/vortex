@@ -77,9 +77,9 @@ int main(int argc, char **argv) {
 	processor.dcr_write(VX_DCR_BASE_GRID_DIM0, 1);
 	processor.dcr_write(VX_DCR_BASE_GRID_DIM1, 1);
 	processor.dcr_write(VX_DCR_BASE_GRID_DIM2, 1);
-	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM0, 1);
+	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM0, 48);
 	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM1, 1);
-	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM2, 64);
+	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM2, 1);
 
 	// load program
 	{
