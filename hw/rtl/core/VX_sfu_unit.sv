@@ -36,6 +36,7 @@ module VX_sfu_unit import VX_gpu_pkg::*; #(
 
     VX_commit_csr_if.slave  commit_csr_if,
     VX_sched_csr_if.slave   sched_csr_if,
+    VX_cta_csr_if.slave     cta_csr_if,
 
     // Outputs
     VX_commit_if.master     commit_if [`ISSUE_WIDTH],
@@ -132,6 +133,7 @@ module VX_sfu_unit import VX_gpu_pkg::*; #(
     `endif
 
         .sched_csr_if   (sched_csr_if),
+        .cta_csr_if     (cta_csr_if),
         .commit_csr_if  (commit_csr_if),
         .result_if      (pe_result_if[PE_IDX_CSRS])
     );

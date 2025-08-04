@@ -53,13 +53,14 @@ module VX_kmu import VX_gpu_pkg::*; (
 
     // DCR write logic
     always_ff @(posedge clk) begin
-        if (reset) begin
-            kmu_data.pc        <= '0;
-            kmu_data.param     <= '0;
-            kmu_data.grid_dim  <= '{default:0};
-            kmu_data.block_dim <= '{default:0};
-            smem_size          <= '0;
-        end else if (dcr_wr_valid) begin
+        // if (reset) begin
+        //     kmu_data.pc        <= '0;
+        //     kmu_data.param     <= '0;
+        //     kmu_data.grid_dim  <= '{default:0};
+        //     kmu_data.block_dim <= '{default:0};
+        //     smem_size          <= '0;
+        // end else if (dcr_wr_valid) begin
+        if (dcr_wr_valid) begin
             case(dcr_wr_addr)
                 // PC
                 `VX_DCR_BASE_STARTUP_ADDR0: kmu_data.pc <= dcr_wr_data;
@@ -75,6 +76,7 @@ module VX_kmu import VX_gpu_pkg::*; (
                 `VX_DCR_BASE_BLOCK_DIM2:    kmu_data.block_dim[2] <= dcr_wr_data;
                 // Shared memory size
                 `VX_DCR_BASE_SMEM_SIZE:     smem_size <= dcr_wr_data;
+                // `VX_DCR_BASE_START_EXE:     start <= '1;
                 default: ; // ignore
             endcase
         end
@@ -90,44 +92,56 @@ module VX_kmu import VX_gpu_pkg::*; (
             all_cta_sent <= 0;
             kmu_bus_out[0].req_valid <= 0;
         end else begin
-            if (!all_cta_sent && kmu_bus_out[0].req_ready) begin
-                // Prepare and send one CTA block
-                kmu_bus_out[0].req_data.num_warps <= total_warps;
-                kmu_bus_out[0].req_data.start_pc  <= kmu_data.pc;
-                kmu_bus_out[0].req_data.param     <= kmu_data.param;
-                kmu_bus_out[0].req_data.cta_x     <= counter_x;
-                kmu_bus_out[0].req_data.cta_y     <= counter_y;
-                kmu_bus_out[0].req_data.cta_z     <= counter_z;
-                kmu_bus_out[0].req_data.cta_id    <= counter_id;
-                kmu_bus_out[0].req_data.remain_mask    <= remain_mask;
-                kmu_bus_out[0].req_valid <= 1;
-
-                // Advance to next CTA block
-                counter_z  <= counter_z + 1;
-                counter_id <= counter_id + 1;
-                if (counter_z + 1 >= kmu_data.grid_dim[2]) begin
-                    counter_z <= 0;
-                    counter_y <= counter_y + 1;
-                    if (counter_y + 1 >= kmu_data.grid_dim[1]) begin
-                        counter_y <= 0;
-                        counter_x <= counter_x + 1;
-                        if (counter_x + 1 >= kmu_data.grid_dim[0]) begin
-                            all_cta_sent <= 1;
+            // If all CTAs sent, keep valid low
+            if (all_cta_sent) begin
+                kmu_bus_out[0].req_valid <= 0;
+            end else begin
+                // If not currently valid, prepare next CTA
+                if (!kmu_bus_out[0].req_valid) begin
+                    // Prepare and send one CTA block
+                    kmu_bus_out[0].req_data.num_warps    <= total_warps;
+                    kmu_bus_out[0].req_data.start_pc     <= kmu_data.pc;
+                    kmu_bus_out[0].req_data.param        <= kmu_data.param;
+                    kmu_bus_out[0].req_data.cta_x        <= counter_x;
+                    kmu_bus_out[0].req_data.cta_y        <= counter_y;
+                    kmu_bus_out[0].req_data.cta_z        <= counter_z;
+                    kmu_bus_out[0].req_data.cta_id       <= counter_id;
+                    kmu_bus_out[0].req_data.remain_mask  <= remain_mask;
+                    kmu_bus_out[0].req_valid             <= 1;
+                end
+                // Advance to next CTA block only after handshake
+                if (kmu_bus_out[0].req_valid && kmu_bus_out[0].req_ready) begin
+                    // Advance counters
+                    counter_z  <= counter_z + 1;
+                    counter_id <= counter_id + 1;
+                    if (counter_z + 1 >= kmu_data.grid_dim[2]) begin
+                        counter_z <= 0;
+                        counter_y <= counter_y + 1;
+                        if (counter_y + 1 >= kmu_data.grid_dim[1]) begin
+                            counter_y <= 0;
+                            counter_x <= counter_x + 1;
+                            if (counter_x + 1 >= kmu_data.grid_dim[0]) begin
+                                all_cta_sent <= 1;
+                            end
                         end
                     end
+                    // Deassert valid until next CTA is prepared
+                    kmu_bus_out[0].req_valid <= 0;
                 end
-            end else begin
-                kmu_bus_out[0].req_valid <= 0;
             end
         end
     end
 
     // Start signal logic (optional, can be customized)
     always_ff @(posedge clk) begin
-        if (reset)
-            start <= 0;
-        else
-            start <= 1;
+        // if (start) begin
+        //     start <= '0;
+        // end
+        if (reset) begin
+            start <= '1;
+        end else begin
+            start <= '0;
+        end
     end
 
 endmodule

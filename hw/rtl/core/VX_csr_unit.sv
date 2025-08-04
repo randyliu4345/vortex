@@ -34,6 +34,7 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
 
     VX_commit_csr_if.slave      commit_csr_if,
     VX_sched_csr_if.slave       sched_csr_if,
+    VX_cta_csr_if.slave         cta_csr_if,
     VX_execute_if.slave         execute_if,
     VX_result_if.master         result_if
 );
@@ -91,10 +92,7 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
         .active_warps   (sched_csr_if.active_warps),
         .thread_masks   (sched_csr_if.thread_masks),
 
-        .cta_x          (sched_csr_if.cta_x),
-        .cta_y          (sched_csr_if.cta_y),
-        .cta_z          (sched_csr_if.cta_z),
-        .cta_id         (sched_csr_if.cta_id),
+        .cta_csr_if     (cta_csr_if),
 
     `ifdef EXT_F_ENABLE
         .fpu_csr_if     (fpu_csr_if),

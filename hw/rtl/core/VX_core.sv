@@ -62,6 +62,8 @@ module VX_core import VX_gpu_pkg::*; #(
     VX_commit_if        commit_if[NUM_EX_UNITS * `ISSUE_WIDTH]();
     VX_writeback_if     writeback_if[`ISSUE_WIDTH]();
 
+    VX_cta_csr_if cta_csr_if();
+
     VX_lsu_mem_if #(
         .NUM_LANES (`NUM_LSU_LANES),
         .DATA_SIZE (LSU_WORD_SIZE),
@@ -118,7 +120,8 @@ module VX_core import VX_gpu_pkg::*; #(
         .sched_csr_if   (sched_csr_if),
 
         .busy           (busy),
-        .task_in        (task_in[0])
+        .task_in        (task_in[0]),
+        .cta_csr_if     (cta_csr_if)
     );
 
     VX_fetch #(
@@ -185,7 +188,8 @@ module VX_core import VX_gpu_pkg::*; #(
         .sched_csr_if   (sched_csr_if),
 
         .warp_ctl_if    (warp_ctl_if),
-        .branch_ctl_if  (branch_ctl_if)
+        .branch_ctl_if  (branch_ctl_if),
+        .cta_csr_if     (cta_csr_if)
     );
 
     VX_commit #(

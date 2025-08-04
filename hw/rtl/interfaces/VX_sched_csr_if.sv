@@ -18,19 +18,10 @@ interface VX_sched_csr_if import VX_gpu_pkg::*; ();
     wire [PERF_CTR_BITS-1:0]        cycles;
     wire [`NUM_WARPS-1:0]           active_warps;
     wire [`NUM_WARPS-1:0][`NUM_THREADS-1:0] thread_masks;
-    wire [`NUM_WARPS-1:0][31:0]     cta_x;
-    wire [`NUM_WARPS-1:0][31:0]     cta_y;
-    wire [`NUM_WARPS-1:0][31:0]     cta_z;
-    wire [`NUM_WARPS-1:0][31:0]     cta_id;
     wire                            alm_empty;
     wire [NW_WIDTH-1:0]             alm_empty_wid;
     wire                            unlock_warp;
     wire [NW_WIDTH-1:0]             unlock_wid;
-
-    `UNUSED_VAR(cta_x);
-    `UNUSED_VAR(cta_y);
-    `UNUSED_VAR(cta_z);
-    `UNUSED_VAR(cta_id);
 
     modport master (
         output cycles,
@@ -39,11 +30,7 @@ interface VX_sched_csr_if import VX_gpu_pkg::*; ();
         input  alm_empty_wid,
         output alm_empty,
         input  unlock_wid,
-        input  unlock_warp,
-        output cta_x,
-        output cta_y,
-        output cta_z,
-        output cta_id
+        input  unlock_warp
     );
 
     modport slave (
@@ -53,11 +40,7 @@ interface VX_sched_csr_if import VX_gpu_pkg::*; ();
         output alm_empty_wid,
         input  alm_empty,
         output unlock_wid,
-        output unlock_warp,
-        input cta_x,
-        input cta_y,
-        input cta_z,
-        input cta_id
+        output unlock_warp
     );
 
 endinterface

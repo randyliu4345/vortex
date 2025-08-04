@@ -42,6 +42,7 @@ module VX_execute import VX_gpu_pkg::*; #(
     VX_sched_csr_if.slave   sched_csr_if,
     VX_branch_ctl_if.master branch_ctl_if [`NUM_ALU_BLOCKS],
     VX_warp_ctl_if.master   warp_ctl_if,
+    VX_cta_csr_if.slave     cta_csr_if,
 
     // commit interface
     VX_commit_csr_if.slave  commit_csr_if
@@ -115,7 +116,8 @@ module VX_execute import VX_gpu_pkg::*; #(
     `endif
         .commit_csr_if  (commit_csr_if),
         .sched_csr_if   (sched_csr_if),
-        .warp_ctl_if    (warp_ctl_if)
+        .warp_ctl_if    (warp_ctl_if),
+        .cta_csr_if     (cta_csr_if)
     );
 
 endmodule

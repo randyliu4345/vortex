@@ -55,10 +55,7 @@ import VX_fpu_pkg::*;
     input wire [`NUM_WARPS-1:0]         active_warps,
     input wire [`NUM_WARPS-1:0][`NUM_THREADS-1:0] thread_masks,
 
-    input wire [`NUM_WARPS-1:0][31:0]   cta_x,
-    input wire [`NUM_WARPS-1:0][31:0]   cta_y,
-    input wire [`NUM_WARPS-1:0][31:0]   cta_z,
-    input wire [`NUM_WARPS-1:0][31:0]   cta_id,
+    VX_cta_csr_if.slave                 cta_csr_if,
 
     input wire                          read_enable,
     input wire [UUID_WIDTH-1:0]         read_uuid,
@@ -78,18 +75,10 @@ import VX_fpu_pkg::*;
     `UNUSED_VAR (write_wid)
     `UNUSED_VAR (write_data)
 
-    `UNUSED_VAR(cta_x)
-    `UNUSED_VAR(cta_y)
-    `UNUSED_VAR(cta_z)
-    `UNUSED_VAR(cta_id)
-
     // CSRs Write /////////////////////////////////////////////////////////////
 
     reg [`XLEN-1:0] mscratch;
-    reg [`NUM_WARPS-1:0][31:0] csr_cta_x;
-    reg [`NUM_WARPS-1:0][31:0] csr_cta_y;
-    reg [`NUM_WARPS-1:0][31:0] csr_cta_z;    
-    reg [`NUM_WARPS-1:0][31:0] csr_cta_id;
+    csr_cta_data_t [`NUM_WARPS-1:0] csr_ctas;
 
 `ifdef EXT_F_ENABLE
     reg [`NUM_WARPS-1:0][INST_FRM_BITS+`FP_FLAGS_BITS-1:0] fcsr, fcsr_n;
@@ -137,10 +126,7 @@ import VX_fpu_pkg::*;
     always @(posedge clk) begin
         if (reset) begin
             mscratch <= base_dcrs.startup_arg;
-            csr_cta_x <= '0;
-            csr_cta_y <= '0;
-            csr_cta_z <= '0;
-            csr_cta_id <= '0;
+            csr_ctas <= '0;
         end
         if (write_enable) begin
             case (write_addr)
@@ -169,6 +155,10 @@ import VX_fpu_pkg::*;
                 end
             endcase
         end
+        if (cta_csr_if.valid) begin
+            csr_ctas[cta_csr_if.wid] <= cta_csr_if.data;
+            // `TRACE(0, ("The csr is written. cta_z: %d\n", csr_ctas[cta_csr_if.wid].cta_z));
+        end
     end
 
     // CSRs read //////////////////////////////////////////////////////////////
@@ -193,10 +183,10 @@ import VX_fpu_pkg::*;
         `endif
             `VX_CSR_MSCRATCH   : read_data_rw_w = mscratch;
 
-            `VX_CSR_CTA_X      : read_data_rw_w = csr_cta_x[read_wid];
-            `VX_CSR_CTA_Y      : read_data_rw_w = csr_cta_y[read_wid];
-            `VX_CSR_CTA_Z      : read_data_rw_w = csr_cta_z[read_wid];
-            `VX_CSR_CTA_ID     : read_data_rw_w = csr_cta_id[read_wid];            
+            `VX_CSR_CTA_X      : read_data_rw_w = csr_ctas[read_wid].cta_x;
+            `VX_CSR_CTA_Y      : read_data_rw_w = csr_ctas[read_wid].cta_y;
+            `VX_CSR_CTA_Z      : read_data_rw_w = csr_ctas[read_wid].cta_z;
+            `VX_CSR_CTA_ID     : read_data_rw_w = csr_ctas[read_wid].cta_id;            
 
             `VX_CSR_WARP_ID    : read_data_ro_w = `XLEN'(read_wid);
             `VX_CSR_CORE_ID    : read_data_ro_w = `XLEN'(CORE_ID);

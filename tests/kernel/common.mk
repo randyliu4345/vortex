@@ -39,7 +39,10 @@ $(PROJECT).bin: $(PROJECT).elf
 $(PROJECT).elf: $(SRCS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-run-rtlsim: $(PROJECT).bin
+$(ROOT_DIR)/sim/rtlsim/rtlsim:
+	make -C $(ROOT_DIR)/sim/rtlsim > /dev/null
+
+run-rtlsim: $(PROJECT).bin $(ROOT_DIR)/sim/rtlsim/rtlsim
 	$(ROOT_DIR)/sim/rtlsim/rtlsim $(PROJECT).bin
 
 run-simx: $(PROJECT).bin

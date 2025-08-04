@@ -3,110 +3,108 @@ module VX_cta_dispatch import VX_gpu_pkg::*;
     input wire      clk,
     input wire      reset,
 
-    // some input for tmp test use, subject to change later
+    // CTA task input
     VX_kmu_bus_if.slave         task_in,
 
-    input wire[`NUM_WARPS-1:0]  active_warps,
-    input wire[31:0]            num_warps,
-    output reg[`NUM_WARPS-1:0] sched_warps,
-    output reg[`NUM_WARPS-1:0][31:0] cta_x,
-    output reg[`NUM_WARPS-1:0][31:0] cta_y,
-    output reg[`NUM_WARPS-1:0][31:0] cta_z,
-    output reg[`NUM_WARPS-1:0][31:0] cta_id,
-    output reg[`NUM_WARPS-1:0][`XLEN-1:0]   pc,
-    output reg[`NUM_WARPS-1:0][`XLEN-1:0]   param,
-    output reg[`NUM_WARPS-1:0][`NUM_THREADS-1:0] remain_masks
+    input wire[`NUM_WARPS-1:0]          active_warps,
+
+    // TODO: fix the interface
+    output reg[`XLEN-1:0]   pc,
+    output reg[`XLEN-1:0]   param,  
+    output reg[`NUM_THREADS-1:0] remain_masks,
+
+    VX_cta_csr_if.master                cta_csr_if,
+
+    output wire[`CLOG2(`NUM_WARPS)-1:0]     cta_dispatch_wid,
+    output reg                             dispatch_valid
 );
 
     typedef enum logic [0:0] { IDLE = 1'b0, DISPATCH = 1'b1 } state_t;
-    state_t state, next_state;
+    state_t state;
 
-    reg [`XLEN-1:0] cur_pc;
-    reg [`XLEN-1:0] cur_param;
-    reg [31:0]      cur_cta_x;
-    reg [31:0]      cur_cta_y;
-    reg [31:0]      cur_cta_z;
-    reg [31:0]      cur_cta_id;
+    // kernel message that is currently dispatched
     reg [`NUM_THREADS-1:0]      cur_remain_mask;
 
     int warp_counter;
 
-    assign task_in.req_ready = ~state;
+    assign task_in.req_ready = (state == IDLE && ~reset);
 
-    // Next state logic
-    always_comb begin
-        next_state = state;
-        if (state == IDLE && task_in.req_valid && task_in.req_ready) begin
-            next_state = DISPATCH;
+    // Generate indices for data_in
+    logic [`NUM_WARPS-1:0][`CLOG2(`NUM_WARPS)-1:0] warp_indices;
+    generate
+        for (genvar i = 0; i < `NUM_WARPS; ++i) begin : gen_warp_index
+            assign warp_indices[i] = i[`CLOG2(`NUM_WARPS)-1:0];
         end
+    endgenerate
 
-        if (state == DISPATCH && warp_counter >= num_warps) begin
-            next_state = IDLE;
-        end
-    end
+    logic cta_dispatch_valid;
 
-    // State register
+    // Find the first idle warp (active_warps[i] == 0)
+    VX_find_first #(
+        .N(`NUM_WARPS),
+        .DATAW(`CLOG2(`NUM_WARPS)),
+        .REVERSE(0)
+    ) find_first_idle (
+        .data_in    (warp_indices),
+        .valid_in   (~active_warps), // invert to find first '0'
+        .data_out   (cta_dispatch_wid),
+        .valid_out  (cta_dispatch_valid)
+    );
+
+    // assign dispatch_valid = (state == DISPATCH) && (cta_dispatch_valid);
+    assign cta_csr_if.wid = cta_dispatch_wid;
+    assign cta_csr_if.valid = dispatch_valid;
+
+    // FSM and dispatch logic
     always_ff @(posedge clk) begin
         if (reset) begin
-            state <= IDLE;
-            warp_counter <= 0;
+            state         <= IDLE;
+            warp_counter  <= 0;
+            pc            <= '0;
+            param         <= '0;
+            remain_masks  <= '0;
+            cur_remain_mask <= '0;
+            dispatch_valid <= '0;
         end else begin
-            state <= next_state;
-        end
+            case (state)
+                IDLE: begin
+                    warp_counter <= 0;
+                    if (task_in.req_valid && task_in.req_ready) begin
+                        pc              <= task_in.req_data.start_pc;
+                        param           <= task_in.req_data.param;
+                        cur_remain_mask <= task_in.req_data.remain_mask;
+                        cta_csr_if.data.cta_x <= task_in.req_data.cta_x;
+                        cta_csr_if.data.cta_y <= task_in.req_data.cta_y;
+                        cta_csr_if.data.cta_z <= task_in.req_data.cta_z;
+                        cta_csr_if.data.cta_id <= task_in.req_data.cta_id;
+                        state          <= DISPATCH;
+                    end
+                end
 
-        if (next_state == IDLE) begin
-            warp_counter <= 0;
-        end
+                DISPATCH: begin
+                    if (cta_dispatch_valid && warp_counter < task_in.req_data.num_warps) begin
+                        // Set remain_masks for the last warp
+                        if (warp_counter == task_in.req_data.num_warps - 1)
+                            remain_masks <= cur_remain_mask;
+                        else
+                            remain_masks <= {`NUM_THREADS{1'b1}};
 
-        if (state == IDLE && next_state == DISPATCH) begin
-            cur_pc <= task_in.req_data.start_pc;
-            cur_param <= task_in.req_data.param;
-            cur_cta_x <= task_in.req_data.cta_x;
-            cur_cta_y <= task_in.req_data.cta_y;
-            cur_cta_z <= task_in.req_data.cta_z;
-            cur_cta_id <= task_in.req_data.cta_id;
-            cur_remain_mask <= task_in.req_data.remain_mask;
-        end
-    end
+                        if (dispatch_valid == 0) begin
+                            dispatch_valid <= 1;
+                        end else begin
+                            dispatch_valid <= 0;
+                            warp_counter <= warp_counter + 1;
+                        end
+                    end
+                    // Exit DISPATCH after all warps are dispatched
+                    if (warp_counter == task_in.req_data.num_warps) begin
+                        dispatch_valid <= 0;
+                        state <= IDLE;
+                    end
+                end
 
-    int idle_warp;
-    logic [`NUM_WARPS-1:0] active_warps_n;
-    // pick a warp to dispatch
-    always_comb begin
-        for(idle_warp = 0; idle_warp < `NUM_WARPS; idle_warp++) begin
-            if (~active_warps[idle_warp])
-                break;
-        end
-
-        active_warps_n = active_warps;
-        active_warps_n[idle_warp] = 1'b1;
-    end
-
-    // dispatch logic
-    always_ff @(posedge clk) begin
-        if (state == DISPATCH && ~(&active_warps) && warp_counter < num_warps) begin
-            warp_counter <= warp_counter + 1;
-            sched_warps <= active_warps_n;
-            pc[idle_warp] <= cur_pc;
-            param[idle_warp] <= cur_param;
-            cta_x[idle_warp] <= cur_cta_x;
-            cta_y[idle_warp] <= cur_cta_y;
-            cta_z[idle_warp] <= cur_cta_z;
-            cta_id[idle_warp] <= cur_cta_id;
-            remain_masks[idle_warp] <= cur_remain_mask;
-        end
-    end
-
-    // cta dimension and id logic
-    always_ff @(posedge clk) begin
-        if (reset) begin
-            cta_x <= '0;
-            cta_y <= '0;
-            cta_z <= '0;
-            cta_id <= '0;
-            pc <= '0;
-            param <= '0;
-            remain_masks <= '0;
+                default: state <= IDLE;
+            endcase
         end
     end
 

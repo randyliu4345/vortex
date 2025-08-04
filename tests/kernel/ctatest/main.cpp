@@ -4,8 +4,8 @@
 
 int main()
 {
-	size_t cta_x = csr_read(VX_CSR_CTA_X);
-	vx_printf("cta_x: %d\n", cta_x);
+	size_t cta_z = csr_read(VX_CSR_CTA_Z);
+	vx_printf("cta_z: %d\n", cta_z);
 
 	return 0;
 }

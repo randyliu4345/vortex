@@ -45,7 +45,9 @@ module VX_schedule import VX_gpu_pkg::*; #(
     output wire             busy,
 
     // Distributed task
-    VX_kmu_bus_if.slave     task_in
+    VX_kmu_bus_if.slave     task_in,
+
+    VX_cta_csr_if.master    cta_csr_if
 );
     `UNUSED_SPARAM (INSTANCE_ID)
     `UNUSED_PARAM (CORE_ID)
@@ -75,20 +77,25 @@ module VX_schedule import VX_gpu_pkg::*; #(
     wire schedule_fire = schedule_valid && schedule_ready;
     wire schedule_if_fire = schedule_if.valid && schedule_if.ready;
 
+    wire cta_dispatch_valid;
+    wire[`CLOG2(`NUM_WARPS)-1:0] cta_dispatch_wid;
+    wire[`XLEN-1:0] cta_dispatch_pc;
+    wire[`NUM_THREADS-1:0] cta_dispatch_threadmask;
+    `UNUSED_VAR(cta_dispatch_valid);
+    `UNUSED_VAR(cta_dispatch_wid);
+    `UNUSED_VAR(cta_dispatch_pc);
+    `UNUSED_VAR(cta_dispatch_threadmask);
     VX_cta_dispatch cta_dispatcher(
         .clk    (clk),
         .reset  (reset),
         .task_in        (task_in),
-        .active_warps   ('0),
-        .num_warps      ('0),
-        .sched_warps    ('x),
-        .cta_x          (sched_csr_if.cta_x),
-        .cta_y          (sched_csr_if.cta_y),
-        .cta_z          (sched_csr_if.cta_z),
-        .cta_id         (sched_csr_if.cta_id),
-        .pc             ('x),
+        .active_warps   (active_warps),
+        .pc             (cta_dispatch_pc),
         .param          ('x),
-        .remain_masks   ('x)
+        .remain_masks   (cta_dispatch_threadmask),
+        .cta_csr_if     (cta_csr_if),
+        .cta_dispatch_wid   (cta_dispatch_wid),
+        .dispatch_valid     (cta_dispatch_valid)
     );
 
     // branch
@@ -130,6 +137,13 @@ module VX_schedule import VX_gpu_pkg::*; #(
         barrier_ctrs_n  = barrier_ctrs;
         barrier_stalls_n= barrier_stalls;
         warp_pcs_n      = warp_pcs;
+
+
+        // if (cta_dispatch_valid) begin
+        //     active_warps_n[cta_dispatch_wid] = 1;
+        //     warp_pcs_n[cta_dispatch_wid] = from_fullPC(cta_dispatch_pc);
+        //     thread_masks_n[cta_dispatch_wid] = cta_dispatch_threadmask;
+        // end
 
         // decode unlock
         if (decode_sched_if.valid && decode_sched_if.unlock) begin
@@ -234,6 +248,7 @@ module VX_schedule import VX_gpu_pkg::*; #(
         if (reset) begin
             barrier_masks   <= '0;
             barrier_ctrs    <= '0;
+            // `TRACE(0, ("RESETED\n"));
         `ifdef GBAR_ENABLE
             gbar_req_valid  <= 0;
         `endif
@@ -246,19 +261,23 @@ module VX_schedule import VX_gpu_pkg::*; #(
             wspawn.valid    <=  0;
 
             // activate first warp
-            warp_pcs[0]     <= from_fullPC(base_dcrs.startup_addr);
-            warp_pcs[1]     <= from_fullPC(base_dcrs.startup_addr);
-            warp_pcs[2]     <= from_fullPC(base_dcrs.startup_addr);
-            warp_pcs[3]     <= from_fullPC(base_dcrs.startup_addr);
-            active_warps[0] <= 1;
-            active_warps[1] <= 1;
-            active_warps[2] <= 1;
-            active_warps[3] <= 1;
-            thread_masks[0][0] <= 1;
-            thread_masks[0][1] <= 1;
-            thread_masks[1][0] <= 1;
-            thread_masks[2][0] <= 1;
-            thread_masks[3][0] <= 1;
+            // warp_pcs[0]     <= from_fullPC(base_dcrs.startup_addr);
+            // warp_pcs[1]     <= from_fullPC(base_dcrs.startup_addr);
+            // warp_pcs[2]     <= from_fullPC(base_dcrs.startup_addr);
+            // warp_pcs[3]     <= from_fullPC(base_dcrs.startup_addr);
+            // active_warps[0] <= 1;
+            // active_warps[1] <= 1;
+            // active_warps[2] <= 1;
+            // active_warps[3] <= 1;
+            // thread_masks[0][0] <= 1;
+            // thread_masks[1][0] <= 1;
+            // thread_masks[2][0] <= 1;
+            // thread_masks[3][0] <= 1;
+            // thread_masks[0][1] <= 1;
+            // thread_masks[0][1] <= 1;
+            // thread_masks[0][2] <= 1;
+            // thread_masks[0][3] <= 1;
+
             is_single_warp  <= 1;
         end else begin
             active_warps   <= active_warps_n;
@@ -295,6 +314,20 @@ module VX_schedule import VX_gpu_pkg::*; #(
                 gbar_req_valid <= 0;
             end
         `endif
+
+            // if (cta_dispatch_valid) begin
+            //     // `TRACE(0, ("cta_dispatch_valid is on\n"));
+            // end
+
+            if (cta_dispatch_valid) begin
+                active_warps[cta_dispatch_wid] <= 1;
+                warp_pcs[cta_dispatch_wid] <= from_fullPC(cta_dispatch_pc);
+                thread_masks[cta_dispatch_wid] <= cta_dispatch_threadmask;
+            end
+
+            // if (cta_dispatch_valid && cta_dispatch_wid == 0) begin
+            //     `TRACE(0, ("distribute task for warp#0, active_mask_n=%b, pc=%h, tmask=%b\n", active_warps_n, warp_pcs_n[0], thread_masks_n[0]));
+            // end
 
             if (busy) begin
                 cycles <= cycles + 1;
@@ -370,6 +403,7 @@ module VX_schedule import VX_gpu_pkg::*; #(
 `else
     assign instr_uuid = '0;
 `endif
+
 
     VX_elastic_buffer #(
         .DATAW (`NUM_THREADS + PC_BITS + NW_WIDTH + UUID_WIDTH),

@@ -908,6 +908,14 @@ package VX_gpu_pkg;
         logic [`XLEN-1:0]   param;
     } kmu_data_t;
 
+    /////////////////////////////// csr cta data type /////////////////////////////
+    typedef struct packed {
+        logic [31:0]    cta_x;
+        logic [31:0]    cta_y;
+        logic [31:0]    cta_z;
+        logic [31:0]    cta_id;
+    } csr_cta_data_t;
+
 endpackage
 
 `IGNORE_UNUSED_END
