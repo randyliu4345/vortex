@@ -78,6 +78,7 @@ module VX_cta_dispatch import VX_gpu_pkg::*;
             param           <= '0;
             cur_remain_mask <= '0;
             num_warps <= 0;
+            cta_csr_if.valid    <= 0;
         end else begin
             case (state)
                 IDLE: begin
@@ -93,7 +94,7 @@ module VX_cta_dispatch import VX_gpu_pkg::*;
                         cta_csr_if.data.cta_x   <= task_in.req_data.cta_x;
                         cta_csr_if.data.cta_y   <= task_in.req_data.cta_y;
                         cta_csr_if.data.cta_z   <= task_in.req_data.cta_z;
-                        cta_csr_if.data.cta_id  <= task_in.req_data.cta_id;
+                        // cta_csr_if.data.cta_id  <= task_in.req_data.cta_id;
                         state                   <= DISPATCH;
                     end
                 end
@@ -105,6 +106,7 @@ module VX_cta_dispatch import VX_gpu_pkg::*;
                         at the same time
                         */
                         warp_counter        <= warp_counter + 1;
+                        cta_csr_if.data.cta_id  <= warp_counter;
                         cta_csr_if.wid      <= cta_dispatch_wid;
                         cta_csr_if.valid    <= 1;
                     end else begin

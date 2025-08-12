@@ -28,6 +28,7 @@ _start:
   call  __init_tls
 
   # clear BSS segment
+  # TODO: should execute by warp0 and thread0
   la    a0, _edata
   la    a2, _end
   sub   a2, a2, a0
@@ -45,6 +46,9 @@ _start:
 
   # call main program routine
   call  main
+
+  # Moving to single thread
+  # vx_tmc(0 == vx_warp_id());
 
   # call exit routine
   tail  exit

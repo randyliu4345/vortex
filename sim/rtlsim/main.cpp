@@ -74,12 +74,12 @@ int main(int argc, char **argv) {
     processor.dcr_write(VX_DCR_BASE_STARTUP_ADDR1, startup_addr >> 32);
 #endif
 	processor.dcr_write(VX_DCR_BASE_MPM_CLASS, 0);
-	processor.dcr_write(VX_DCR_BASE_GRID_DIM0, 1);
-	processor.dcr_write(VX_DCR_BASE_GRID_DIM1, 1);
-	processor.dcr_write(VX_DCR_BASE_GRID_DIM2, 1);
-	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM0, 48);
-	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM1, 1);
-	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM2, 1);
+	processor.dcr_write(VX_DCR_BASE_GRID_DIM0, 1); // grid x
+	processor.dcr_write(VX_DCR_BASE_GRID_DIM1, 2); // grid y
+	processor.dcr_write(VX_DCR_BASE_GRID_DIM2, 3); // grid z
+	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM0, 1); // blk x
+	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM1, 1); // blk y
+	processor.dcr_write(VX_DCR_BASE_BLOCK_DIM2, 4); // blk z
 
 	// load program
 	{
