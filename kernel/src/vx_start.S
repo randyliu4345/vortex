@@ -29,11 +29,11 @@ _start:
 
   # clear BSS segment
   # TODO: should execute by warp0 and thread0
-  la    a0, _edata
-  la    a2, _end
-  sub   a2, a2, a0
-  li    a1, 0
-  call  memset
+  # la    a0, _edata
+  # la    a2, _end
+  # sub   a2, a2, a0
+  # li    a1, 0
+  # call  memset
 
   # initialize trap vector
   # la t0, trap_entry
