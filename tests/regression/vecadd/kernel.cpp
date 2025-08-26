@@ -18,24 +18,24 @@ int main() {
 	int warpSize = vx_num_threads();
 	int threadId = vx_thread_id();
 
-	int cond = (warpId == 0) && (threadId == 0);
-	int sp = vx_split(cond);
+	// int cond = (warpId == 0) && (threadId == 0);
+	// int sp = vx_split(cond);
 
-	if (cond) {
-		asm volatile(
-			"la   a0, _edata\n\t"
-			"la   a2, _end\n\t"
-			"sub  a2, a2, a0\n\t"
-			"li   a1, 0\n\t"
-			"call memset\n\t"
-			:
-			:
-			: "memory", "ra",
-				"a0","a1","a2","a3","a4","a5","a6","a7",
-				"t0","t1","t2","t3","t4","t5","t6");
-	}
+	// if (cond) {
+	// 	asm volatile(
+	// 		"la   a0, _edata\n\t"
+	// 		"la   a2, _end\n\t"
+	// 		"sub  a2, a2, a0\n\t"
+	// 		"li   a1, 0\n\t"
+	// 		"call memset\n\t"
+	// 		:
+	// 		:
+	// 		: "memory", "ra",
+	// 			"a0","a1","a2","a3","a4","a5","a6","a7",
+	// 			"t0","t1","t2","t3","t4","t5","t6");
+	// }
 
-	vx_join(sp);
+	// vx_join(sp);
 
 
 	int g_threadId = warpId * warpSize + threadId;
@@ -47,6 +47,8 @@ int main() {
 	auto dst_ptr  = reinterpret_cast<TYPE*>(arg->dst_addr);
 
 	dst_ptr[g_threadId] = src0_ptr[g_threadId] + src1_ptr[g_threadId];
+
+	vx_tmc(warpId == 0);
 
 	return 0;
 }
