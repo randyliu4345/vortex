@@ -47,7 +47,7 @@ module VX_kmu import VX_gpu_pkg::*; (
             remain_mask = {`NUM_THREADS{1'b1}};
         end else begin
             remain_mask = {`NUM_THREADS{1'b1}};
-            remain_mask = remain_mask << (total_warps * `NUM_THREADS - total_threads);
+            remain_mask = remain_mask >> (total_warps * `NUM_THREADS - total_threads);
         end
     end
 

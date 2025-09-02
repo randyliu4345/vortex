@@ -18,6 +18,8 @@ int main() {
 	int warpSize = vx_num_threads();
 	int threadId = vx_thread_id();
 
+	int core_id = static_cast<int>(csr_read(VX_CSR_CORE_ID));
+
 	// int cond = (warpId == 0) && (threadId == 0);
 	// int sp = vx_split(cond);
 
@@ -38,9 +40,11 @@ int main() {
 	// vx_join(sp);
 
 
-	int g_threadId = warpId * warpSize + threadId;
+	// int g_threadId = warpId * warpSize + threadId;
+	int g_threadId = warpId + threadId;
+	// int g_threadId = warpId;
 
-	// vx_printf("thread id: %d\n", threadId);
+	// vx_printf("core id: %d\n", core_id);f
 
 	auto src0_ptr = reinterpret_cast<TYPE*>(arg->src0_addr);
 	auto src1_ptr = reinterpret_cast<TYPE*>(arg->src1_addr);
