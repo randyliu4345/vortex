@@ -300,6 +300,37 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
           rd_data[t].i = cond ? 0 : rs1_data[t].i;
         }
       } break;
+      case AluType::DOT8: {
+        for (uint32_t t = thread_start; t < num_threads; ++t) {
+          if (!warp.tmask.test(t))
+            continue;
+          
+          uint32_t packedA = rs1_data[t].u;
+          uint32_t packedB = rs2_data[t].u;
+          
+          // Extract 4 int8_t values from each packed 32-bit input
+          int8_t a0 = (int8_t)(packedA & 0xFF);
+          int8_t a1 = (int8_t)((packedA >> 8) & 0xFF);
+          int8_t a2 = (int8_t)((packedA >> 16) & 0xFF);
+          int8_t a3 = (int8_t)((packedA >> 24) & 0xFF);
+          
+          int8_t b0 = (int8_t)(packedB & 0xFF);
+          int8_t b1 = (int8_t)((packedB >> 8) & 0xFF);
+          int8_t b2 = (int8_t)((packedB >> 16) & 0xFF);
+          int8_t b3 = (int8_t)((packedB >> 24) & 0xFF);
+          
+          // Compute dot product: sum of element-wise multiplications
+          int32_t sum = (int32_t)a0 * (int32_t)b0 +
+                        (int32_t)a1 * (int32_t)b1 +
+                        (int32_t)a2 * (int32_t)b2 +
+                        (int32_t)a3 * (int32_t)b3;
+          
+          DP(3, "*** DOT8[" << t << "]: a=0x" << std::hex << packedA 
+             << ", b=0x" << packedB << ", sum=0x" << sum << std::dec);
+          
+          rd_data[t].i = sum;
+        }
+      } break;
       default:
         std::abort();
       }
