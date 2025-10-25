@@ -169,6 +169,9 @@ package VX_trace_pkg;
                         endcase
                     end
                 end
+                ALU_TYPE_DOT8: begin
+                    INST_ALU_DOT8:  `TRACE(level, ("DOT8"))
+                end
                 default: `TRACE(level, ("?"))
             endcase
         end

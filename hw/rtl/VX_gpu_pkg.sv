@@ -182,7 +182,7 @@ package VX_gpu_pkg;
     ///////////////////////////////////////////////////////////////////////////
 
     localparam INST_ALU_ADD =    4'b0000;
-    //localparam INST_ALU_UNUSED=4'b0001;
+    localparam INST_ALU_DOT8 =   4'b0001;
     localparam INST_ALU_LUI =    4'b0010;
     localparam INST_ALU_AUIPC =  4'b0011;
     localparam INST_ALU_SLTU =   4'b0100;
@@ -199,11 +199,12 @@ package VX_gpu_pkg;
     localparam INST_ALU_SLL =    4'b1111;
     localparam INST_ALU_BITS =   4;
 
-    localparam ALU_TYPE_BITS =   2;
+    localparam ALU_TYPE_BITS =   3;
     localparam ALU_TYPE_ARITH =  0;
     localparam ALU_TYPE_BRANCH = 1;
     localparam ALU_TYPE_MULDIV = 2;
     localparam ALU_TYPE_OTHER =  3;
+    localparam ALU_TYPE_DOT8 =  4;
 
     function automatic logic [1:0] inst_alu_class(input logic [INST_ALU_BITS-1:0] op);
         return op[3:2];
