@@ -75,6 +75,7 @@ module VX_tcu_fedp_bhf #(
     for (genvar i = 0; i < TCK; i++) begin : g_prod
         wire [32:0] mult_result_fp16;
         wire [32:0] mult_result_bf16;
+        wire [32:0] mult_result_tf32;
 
         // FP16 multiplication
         VX_tcu_bhf_fmul #(
@@ -118,11 +119,67 @@ module VX_tcu_fedp_bhf #(
             `UNUSED_PIN(fflags)
         );
 
+        // TF32 multiplication
+        // TF32: 1 sign, 8 exponent, 10 mantissa bits (stored as 32-bit)
+        // TF32 uses 32-bit inputs directly (one per word), but we need TCK outputs for the accumulator
+        // Solution: Only instantiate TF32 multipliers for even indices (i % 2 == 0)
+        // For odd indices, output zero. This interleaves N TF32 results with N zeros to produce TCK inputs.
+        // Example with N=4, TCK=8: TF32[0], 0, TF32[1], 0, TF32[2], 0, TF32[3], 0
+        localparam integer WORD_IDX = i >> 1;
+        
+        if (i[0] == 0) begin : g_tf32_mul
+            // Even index: instantiate TF32 multiplier using 32-bit word
+            // TF32 format stored in lower 19 bits: 1 sign (bit 18), 8 exponent (bits 17:10), 10 mantissa (bits 9:0)
+            // Pack TF32 into 32-bit IEEE format by padding mantissa with zeros
+            // Format: {sign, exp[7:0], mantissa[9:0], 13'b0} = 32 bits total
+            wire [31:0] a_tf32_packed;
+            wire [31:0] b_tf32_packed;
+            assign a_tf32_packed = {
+                a_row[WORD_IDX][18],                    // sign (bit 18)
+                a_row[WORD_IDX][17:10],                // exponent (bits 17:10)
+                a_row[WORD_IDX][9:0],                  // mantissa (bits 9:0)
+                13'b0                                   // pad with zeros (bits 12:0)
+            };
+            assign b_tf32_packed = {
+                b_col[WORD_IDX][18],                   // sign (bit 18)
+                b_col[WORD_IDX][17:10],                // exponent (bits 17:10)
+                b_col[WORD_IDX][9:0],                  // mantissa (bits 9:0)
+                13'b0                                   // pad with zeros (bits 12:0)
+            };
+            VX_tcu_bhf_fmul #(
+                .IN_EXPW (8),
+                .IN_SIGW (24),                         // FP32: 23 mantissa bits + 1 implicit bit = 24
+                .OUT_EXPW(8),
+                .OUT_SIGW(24),                         // Output to FP32 format (24 = 23+1)
+                .IN_REC  (0),                          // input in IEEE format
+                .OUT_REC (1),                          // output in recoded format
+                .MUL_LATENCY (FMUL_LATENCY),
+                .RND_LATENCY (FRND_LATENCY)
+            ) tf32_mul (
+                .clk    (clk),
+                .reset  (reset),
+                .enable (enable),
+                .frm    (frm),
+                .a      (a_tf32_packed),
+                .b      (b_tf32_packed),
+                .y      (mult_result_tf32),
+                `UNUSED_PIN(fflags)
+            );
+        end else begin : g_tf32_zero
+            // Odd index: output zero in recoded format (will be interleaved with TF32 results)
+            // NOTE: fNToRecFN has issues with all-zero inputs (causes segfault),
+            // so we directly construct the recoded zero value instead of using fNToRecFN.
+            // For recoded format (expWidth=8, sigWidth=24): 
+            //   zero = {sign=0, exp[8:6]=000, exp[5:0]=42, fract=0} = 33'h015000000
+            assign mult_result_tf32 = 33'h015000000;
+        end
+
         logic [32:0] mult_result_mux;
         always_comb begin
             case(fmt_s_delayed)
                 3'd1: mult_result_mux = mult_result_fp16;
                 3'd2: mult_result_mux = mult_result_bf16;
+                3'd3: mult_result_mux = mult_result_tf32;
                 default: mult_result_mux = 'x;
             endcase
         end

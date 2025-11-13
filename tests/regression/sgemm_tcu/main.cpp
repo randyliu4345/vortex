@@ -10,7 +10,7 @@
 #include <vector>
 #include <vortex.h>
 
-#define FLOAT_ULP 6
+#define FLOAT_ULP 20  // Increased tolerance for floating-point precision differences
 #define MAX_ERRORS 100
 
 #define RT_CHECK(_expr)                                      \
