@@ -117,24 +117,44 @@ void ProcessorImpl::set_satp(uint64_t satp) {
 #endif
 
 int ProcessorImpl::run() {
-  SimPlatform::instance().reset();
-  this->reset();
-
+  initialize();
   bool done;
   int exitcode = 0;
   do {
-    SimPlatform::instance().tick();
-    done = true;
-    for (auto cluster : clusters_) {
-      if (cluster->running()) {
-        done = false;
-        continue;
-      }
-      exitcode |= cluster->get_exitcode();
+    tick();
+    done = is_done();
+    if (done) {
+      exitcode = get_exitcode();
     }
-    perf_mem_latency_ += perf_mem_pending_reads_;
   } while (!done);
 
+  return exitcode;
+}
+
+void ProcessorImpl::initialize() {
+  SimPlatform::instance().reset();
+  this->reset();
+}
+
+void ProcessorImpl::tick() {
+  SimPlatform::instance().tick();
+  perf_mem_latency_ += perf_mem_pending_reads_;
+}
+
+bool ProcessorImpl::is_done() const {
+  for (auto cluster : clusters_) {
+    if (cluster->running()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int ProcessorImpl::get_exitcode() const {
+  int exitcode = 0;
+  for (auto cluster : clusters_) {
+    exitcode |= cluster->get_exitcode();
+  }
   return exitcode;
 }
 
@@ -190,6 +210,22 @@ int Processor::run() {
     std::cerr << "Error: unknown exception." << std::endl;
   }
   return -1;
+}
+
+void Processor::initialize() {
+  impl_->initialize();
+}
+
+void Processor::tick() {
+  impl_->tick();
+}
+
+bool Processor::is_done() const {
+  return impl_->is_done();
+}
+
+int Processor::get_exitcode() const {
+  return impl_->get_exitcode();
 }
 
 void Processor::dcr_write(uint32_t addr, uint32_t value) {

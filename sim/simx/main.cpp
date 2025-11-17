@@ -19,17 +19,22 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <signal.h>
+#include <cstring>
 #include "processor.h"
 #include "mem.h"
 #include "constants.h"
 #include <util.h>
 #include "core.h"
 #include "VX_types.h"
+#include "debug_module.h"
+#include "jtag_dtm.h"
+#include "remote_bitbang.h"
 
 using namespace vortex;
 
 static void show_usage() {
-   std::cout << "Usage: [-c <cores>] [-w <warps>] [-t <threads>] [-v: vector-test] [-s: stats] [-h: help] <program>" << std::endl;
+   std::cout << "Usage: [-c <cores>] [-w <warps>] [-t <threads>] [-v: vector-test] [-s: stats] [-h: help] [--rbb-server=<port>] <program>" << std::endl;
 }
 
 uint32_t num_threads = NUM_THREADS;
@@ -38,8 +43,42 @@ uint32_t num_cores = NUM_CORES;
 bool showStats = false;
 bool vector_test = false;
 const char* program = nullptr;
+uint16_t rbb_server_port = 0;
+volatile bool keep_running = true;
+
+// Global debug components
+debug_module_t *g_dm = nullptr;
+jtag_dtm_t *g_dtm = nullptr;
+remote_bitbang_t *g_rbb = nullptr;
+
+void handle_sigint(int sig) {
+  (void)sig;
+  keep_running = false;
+}
 
 static void parse_args(int argc, char **argv) {
+  // First, check for --rbb-server option and environment variable
+  for (int i = 1; i < argc; i++) {
+    if (strncmp(argv[i], "--rbb-server=", 13) == 0) {
+      rbb_server_port = atoi(argv[i] + 13);
+      // Remove this argument by shifting remaining args
+      for (int j = i; j < argc - 1; j++) {
+        argv[j] = argv[j + 1];
+      }
+      argc--;
+      i--;
+    }
+  }
+  
+  // Check environment variable
+  const char *env_rbb = getenv("VORTEX_RBB_SERVER");
+  if (env_rbb != nullptr && rbb_server_port == 0) {
+    rbb_server_port = atoi(env_rbb);
+  }
+  
+  // Reset optind for getopt
+  optind = 1;
+  
   	int c;
   	while ((c = getopt(argc, argv, "t:w:c:vsh")) != -1) {
     	switch (c) {
@@ -82,6 +121,17 @@ int main(int argc, char **argv) {
 
   parse_args(argc, argv);
 
+  // Set up signal handler for clean shutdown
+  signal(SIGINT, handle_sigint);
+
+  // Initialize RBB server if requested
+  if (rbb_server_port > 0) {
+    g_dm = new debug_module_t();
+    g_dtm = new jtag_dtm_t(g_dm);
+    g_rbb = new remote_bitbang_t(rbb_server_port, g_dtm);
+    std::cout << "Remote bitbang server started on port " << rbb_server_port << std::endl;
+  }
+
   {
     // create processor configuation
     Arch arch(num_threads, num_warps, num_cores);
@@ -121,13 +171,56 @@ int main(int argc, char **argv) {
     // run simulation
   #ifdef EXT_V_ENABLE
     // vector test exitcode is a special case
-    if (vector_test) return (processor.run() != 1);
+    if (vector_test) {
+      exitcode = (processor.run() != 1) ? 1 : 0;
+    } else
   #endif
-    // else continue as normal
-    processor.run();
+    {
+      // Custom run loop with RBB server integration
+      processor.initialize();
+      bool done = false;
+      while (!done && keep_running) {
+        // Process incoming JTAG commands from OpenOCD (if RBB server is enabled)
+        if (g_rbb != nullptr) {
+          g_rbb->tick();
+        }
 
-    // read exitcode from @MPM.1
-    ram.read(&exitcode, (IO_MPM_ADDR + 8), 4);
+        // Check if debug module has halted the CPU
+        bool halted = (g_dm != nullptr && g_dm->is_halted());
+
+        if (!halted) {
+          // CPU is running - advance simulation
+          processor.tick();
+          done = processor.is_done();
+          if (done) {
+            exitcode = processor.get_exitcode();
+          }
+        } else {
+          // CPU is halted - only service debug commands, don't advance simulation
+          // Small sleep to avoid busy-waiting
+          usleep(100);
+        }
+      }
+
+      // If we exited due to keep_running being false, read exitcode
+      if (!keep_running && !done) {
+        ram.read(&exitcode, (IO_MPM_ADDR + 8), 4);
+      }
+    }
+  }
+
+  // Cleanup RBB server
+  if (g_rbb != nullptr) {
+    delete g_rbb;
+    g_rbb = nullptr;
+  }
+  if (g_dtm != nullptr) {
+    delete g_dtm;
+    g_dtm = nullptr;
+  }
+  if (g_dm != nullptr) {
+    delete g_dm;
+    g_dm = nullptr;
   }
 
   return exitcode;

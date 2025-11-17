@@ -35,6 +35,12 @@ public:
 
   int run();
 
+  // Methods for custom run loop with debug integration
+  void initialize();
+  void tick();
+  bool is_done() const;
+  int get_exitcode() const;
+
   void dcr_write(uint32_t addr, uint32_t value);
 #ifdef VM_ENABLE
   bool is_satp_unset();

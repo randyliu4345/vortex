@@ -26,6 +26,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
+#include <cstring>
+#include <unistd.h>
+
+// RBB server includes
+#include "debug_module.h"
+#include "jtag_dtm.h"
+#include "remote_bitbang.h"
 
 #include <VX_config.h>
 #ifdef VM_ENABLE
@@ -49,13 +57,32 @@ using namespace vortex;
 class vx_device {
 public:
   vx_device()
-      : arch_(NUM_THREADS, NUM_WARPS, NUM_CORES), ram_(0, MEM_PAGE_SIZE), processor_(arch_), global_mem_(ALLOC_BASE_ADDR, GLOBAL_MEM_SIZE - ALLOC_BASE_ADDR, MEM_PAGE_SIZE, CACHE_BLOCK_SIZE) {
+      : arch_(NUM_THREADS, NUM_WARPS, NUM_CORES), ram_(0, MEM_PAGE_SIZE), processor_(arch_), global_mem_(ALLOC_BASE_ADDR, GLOBAL_MEM_SIZE - ALLOC_BASE_ADDR, MEM_PAGE_SIZE, CACHE_BLOCK_SIZE), 
+        rbb_server_port_(0), dm_(nullptr), dtm_(nullptr), rbb_(nullptr) {
     // attach memory module
     processor_.attach_ram(&ram_);
 #ifdef VM_ENABLE
     std::cout << "*** VM ENABLED!! ***" << std::endl;
     CHECK_ERR(init_VM(), );
 #endif
+
+    // Initialize RBB server if VX_RBB_PORT environment variable is set
+    const char* rbb_port_str = getenv("VX_RBB_PORT");
+    if (rbb_port_str != nullptr) {
+      rbb_server_port_ = static_cast<uint16_t>(atoi(rbb_port_str));
+      if (rbb_server_port_ != 0) {
+        printf("========================================\n");
+        printf("  Vortex Dummy Debug Server (RISC-V)\n");
+        printf("========================================\n");
+        printf("Listening for Remote Bitbang on port %d...\n", rbb_server_port_);
+        printf("Press Ctrl+C to exit.\n\n");
+
+        // Initialize Debug Stack
+        dm_ = new debug_module_t();
+        dtm_ = new jtag_dtm_t(dm_);
+        rbb_ = new remote_bitbang_t(rbb_server_port_, dtm_);
+      }
+    }
   }
 
   ~vx_device() {
@@ -68,6 +95,17 @@ public:
 #endif
     if (future_.valid()) {
       future_.wait();
+    }
+
+    // Cleanup RBB server
+    if (rbb_ != nullptr) {
+      printf("\n[INFO] Shutting down Remote Bitbang server.\n");
+      delete rbb_;
+      delete dtm_;
+      delete dm_;
+      rbb_ = nullptr;
+      dtm_ = nullptr;
+      dm_ = nullptr;
     }
   }
 
@@ -324,7 +362,33 @@ public:
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG1, args_addr >> 32);
 
     // start new run
-    future_ = std::async(std::launch::async, [&] { processor_.run(); });
+    if (rbb_ != nullptr) {
+      // Use custom run loop with RBB server integration
+      future_ = std::async(std::launch::async, [this] { 
+        this->processor_.initialize();
+        bool done = false;
+        while (!done) {
+          // Process incoming JTAG commands from OpenOCD
+          this->rbb_->tick();
+
+          // Check if debug module has halted the CPU
+          bool halted = (this->dm_ != nullptr && this->dm_->is_halted());
+
+          if (!halted) {
+            // CPU is running - advance simulation
+            this->processor_.tick();
+            done = this->processor_.is_done();
+          } else {
+            // CPU is halted - only service debug commands, don't advance simulation
+            // Small sleep to avoid busy-waiting
+            usleep(100);
+          }
+        }
+      });
+    } else {
+      // Normal run without RBB server
+      future_ = std::async(std::launch::async, [&] { processor_.run(); });
+    }
 
     // clear mpm cache
     mpm_cache_.clear();
@@ -618,6 +682,11 @@ private:
   MemoryAllocator *page_table_mem_;
   MemoryAllocator *virtual_mem_;
 #endif
+  // RBB server members
+  uint16_t rbb_server_port_;
+  debug_module_t* dm_;
+  jtag_dtm_t* dtm_;
+  remote_bitbang_t* rbb_;
 };
 
 #include <callbacks.inc>
