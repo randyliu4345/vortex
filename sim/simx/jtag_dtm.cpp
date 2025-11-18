@@ -1,7 +1,7 @@
 #include "jtag_dtm.h"
 #include <cstdio>
 
-jtag_dtm_t::jtag_dtm_t(debug_module_t* dm)
+jtag_dtm_t::jtag_dtm_t(DebugModule* dm)
     : dm(dm),
       _tck(0), _tms(0), _tdi(0), _tdo(0),
       _state(TEST_LOGIC_RESET),

@@ -631,3 +631,78 @@ void Emulator::trigger_ecall() {
 void Emulator::trigger_ebreak() {
   active_warps_.reset();
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+bool Emulator::debug_read_register(uint32_t wid, uint32_t tid, uint32_t reg_idx, Word* value, bool is_fp) {
+  // Validate warp ID
+  if (wid >= arch_.num_warps()) {
+    return false;
+  }
+
+  // Validate thread ID
+  if (tid >= arch_.num_threads()) {
+    return false;
+  }
+
+  // Validate register index
+  if (reg_idx >= MAX_NUM_REGS) {
+    return false;
+  }
+
+  // Validate output pointer
+  if (value == nullptr) {
+    return false;
+  }
+
+  auto& warp = warps_.at(wid);
+
+  if (is_fp) {
+    // Floating-point register
+    *value = static_cast<Word>(warp.freg_file.at(reg_idx).at(tid));
+  } else {
+    // Integer register
+    if (reg_idx == 0) {
+      // x0 is hardwired to zero
+      *value = 0;
+    } else {
+      *value = warp.ireg_file.at(reg_idx).at(tid);
+    }
+  }
+
+  return true;
+}
+
+bool Emulator::debug_write_register(uint32_t wid, uint32_t tid, uint32_t reg_idx, Word value, bool is_fp) {
+  // Validate warp ID
+  if (wid >= arch_.num_warps()) {
+    return false;
+  }
+
+  // Validate thread ID
+  if (tid >= arch_.num_threads()) {
+    return false;
+  }
+
+  // Validate register index
+  if (reg_idx >= MAX_NUM_REGS) {
+    return false;
+  }
+
+  auto& warp = warps_.at(wid);
+
+  if (is_fp) {
+    // Floating-point register
+    warp.freg_file.at(reg_idx).at(tid) = static_cast<uint64_t>(value);
+  } else {
+    // Integer register
+    if (reg_idx == 0) {
+      // x0 is read-only, ignore writes
+      return true;
+    } else {
+      warp.ireg_file.at(reg_idx).at(tid) = value;
+    }
+  }
+
+  return true;
+}

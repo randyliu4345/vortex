@@ -108,6 +108,10 @@ public:
 
   void dcache_write(const void* data, uint64_t addr, uint32_t size);
 
+  // Debug interfaces for DMI access
+  bool debug_read_register(uint32_t wid, uint32_t tid, uint32_t reg_idx, Word* value, bool is_fp);
+  bool debug_write_register(uint32_t wid, uint32_t tid, uint32_t reg_idx, Word value, bool is_fp);
+
 private:
 
   uint32_t fetch(uint32_t wid, uint64_t uuid);

@@ -78,7 +78,7 @@ public:
         printf("Press Ctrl+C to exit.\n\n");
 
         // Initialize Debug Stack
-        dm_ = new debug_module_t();
+        dm_ = new DebugModule();
         dtm_ = new jtag_dtm_t(dm_);
         rbb_ = new remote_bitbang_t(rbb_server_port_, dtm_);
       }
@@ -372,7 +372,7 @@ public:
           this->rbb_->tick();
 
           // Check if debug module has halted the CPU
-          bool halted = (this->dm_ != nullptr && this->dm_->is_halted());
+          bool halted = false; // TODO: Reimplement with Vortex emulator
 
           if (!halted) {
             // CPU is running - advance simulation
@@ -684,7 +684,7 @@ private:
 #endif
   // RBB server members
   uint16_t rbb_server_port_;
-  debug_module_t* dm_;
+  DebugModule* dm_;
   jtag_dtm_t* dtm_;
   remote_bitbang_t* rbb_;
 };

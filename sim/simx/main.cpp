@@ -47,7 +47,7 @@ uint16_t rbb_server_port = 0;
 volatile bool keep_running = true;
 
 // Global debug components
-debug_module_t *g_dm = nullptr;
+DebugModule *g_dm = nullptr;
 jtag_dtm_t *g_dtm = nullptr;
 remote_bitbang_t *g_rbb = nullptr;
 
@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
 
   // Initialize RBB server if requested
   if (rbb_server_port > 0) {
-    g_dm = new debug_module_t();
+    g_dm = new DebugModule();
     g_dtm = new jtag_dtm_t(g_dm);
     g_rbb = new remote_bitbang_t(rbb_server_port, g_dtm);
     std::cout << "Remote bitbang server started on port " << rbb_server_port << std::endl;

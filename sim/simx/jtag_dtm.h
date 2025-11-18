@@ -23,7 +23,7 @@ enum jtag_state_t {
 
 class jtag_dtm_t {
 public:
-    jtag_dtm_t(debug_module_t* dm);
+    jtag_dtm_t(DebugModule* dm);
 
     void reset();
     void set_pins(bool tck, bool tms, bool tdi);
@@ -31,7 +31,7 @@ public:
     jtag_state_t state() const { return _state; }
 
 private:
-    debug_module_t* dm;
+    DebugModule* dm;
 
     bool _tck, _tms, _tdi, _tdo;
     jtag_state_t _state;
