@@ -1,4 +1,5 @@
 #include "debug_module.h"
+#include "emulator.h"
 #include <cstdarg>
 #include <atomic>
 #include <cstring>
@@ -29,7 +30,11 @@ bool DebugModule::verbose_logging() {
 }
 
 DebugModule::DebugModule(size_t mem_size)
-    : command(0),
+    : emulator_(nullptr),
+      halted_(false),
+      resumeack_(true),  // Start with resumeack true (hart is running)
+      havereset_(true),  // Hart has reset at startup
+      command(0),
       memory(mem_size, 0)
 {
     // Initialize data registers
@@ -38,6 +43,12 @@ DebugModule::DebugModule(size_t mem_size)
     }
     
     reset();
+}
+
+void DebugModule::attach_emulator(vortex::Emulator* emulator)
+{
+    emulator_ = emulator;
+    dm_log("[DM] Emulator attached\n");
 }
 
 void DebugModule::reset()
@@ -75,7 +86,7 @@ void DebugModule::update_dmstatus()
     unsigned saved_version = dmstatus.version;
     
     // Update status fields based on hart state
-    /*if (hart.is_halted()) {
+    if (halted_) {
         dmstatus.allhalted = true;
         dmstatus.anyhalted = true;
         dmstatus.allrunning = false;
@@ -87,11 +98,11 @@ void DebugModule::update_dmstatus()
         dmstatus.anyrunning = true;
     }
     
-    dmstatus.allresumeack = hart.get_resumeack();
-    dmstatus.anyresumeack = hart.get_resumeack();
-    dmstatus.allhavereset = hart.get_havereset();
-    dmstatus.anyhavereset = hart.get_havereset();
-    */
+    dmstatus.allresumeack = resumeack_;
+    dmstatus.anyresumeack = resumeack_;
+    dmstatus.allhavereset = havereset_;
+    dmstatus.anyhavereset = havereset_;
+    
     // Hart exists and is available for our stub
     dmstatus.allnonexistent = false;
     dmstatus.anynonexistent = false;
@@ -115,9 +126,11 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
             *value = read_dmstatus();
             // Verify authenticated bit is set at bit 7 (per RISC-V Debug Spec)
             if ((*value & (1U << 7)) == 0) {
-        dm_log("[DM] ERROR: authenticated bit (bit 7) not set! value=0x%x\n", *value);
+                dm_log("[DM] ERROR: authenticated bit (bit 7) not set! value=0x%x\n", *value);
                 *value |= (1U << 7);  // Force it
             }
+            dm_log("[DM] DMSTATUS: halted=%d, running=%d, resumeack=%d, havereset=%d\n",
+                   dmstatus.allhalted, dmstatus.allrunning, dmstatus.allresumeack, dmstatus.allhavereset);
             break;
         case DM_HARTINFO:
             // Hart info: nscratch=1, dataaccess=1, datasize=datacount, dataaddr=0x380
@@ -150,7 +163,7 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
 
 bool DebugModule::dmi_write(unsigned address, uint32_t value)
 {
-    dm_log("[DM] DMI WRITE addr=0x%x data=0x%x\n", address, value);
+    printf("[DM] DMI WRITE addr=0x%x data=0x%x\n", address, value);
     
     // For stub: always allow writes (we're always authenticated)
     // Don't block writes based on authentication state
@@ -182,22 +195,22 @@ bool DebugModule::dmi_write(unsigned address, uint32_t value)
 uint32_t DebugModule::read_dmcontrol()
 {
     uint32_t result = 0;
-    result = set_field_pos<uint32_t>(result, 0x1U, 0, dmcontrol.dmactive ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 1, dmcontrol.ndmreset ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 2, dmcontrol.clrresethaltreq ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 3, dmcontrol.setresethaltreq ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 16, dmcontrol.hartreset ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 28, dmcontrol.ackhavereset ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 30, dmcontrol.resumereq ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 31, dmcontrol.haltreq ? 1U : 0U);
     
-    // Hartsel: bits [25:16] for high, [9:6] for low (simplified, using bits [25:6])
-    result = set_field_pos<uint32_t>(result, 0x3ffU << 6, 6, dmcontrol.hartsel);
-    result = set_field_pos<uint32_t>(result, 0x1U, 26, dmcontrol.hasel ? 1U : 0U);
+    // Build DMCONTROL using direct bit manipulation (clearer and correct)
+    if (dmcontrol.dmactive)       result |= (1U << 0);
+    if (dmcontrol.ndmreset)       result |= (1U << 1);
+    if (dmcontrol.clrresethaltreq) result |= (1U << 2);
+    if (dmcontrol.setresethaltreq) result |= (1U << 3);
+    // hartsel bits [9:6] and [25:16]
+    result |= ((dmcontrol.hartsel & 0xF) << 6);      // hartsello [9:6]
+    result |= ((dmcontrol.hartsel >> 4) << 16);       // hartselhi [25:16]
+    if (dmcontrol.hartreset)      result |= (1U << 16);
+    if (dmcontrol.hasel)          result |= (1U << 26);
+    if (dmcontrol.ackhavereset)   result |= (1U << 28);
+    if (dmcontrol.resumereq)      result |= (1U << 30);
+    if (dmcontrol.haltreq)        result |= (1U << 31);
     
-    // Always ensure dmactive is set for stub
-    result |= 1;
-    
+    printf("[DM] read_dmcontrol: dmactive=%d, result=0x%x\n", dmcontrol.dmactive, result);
     return result;
 }
 
@@ -280,11 +293,19 @@ uint32_t DebugModule::read_dmstatus()
 uint32_t DebugModule::read_abstractcs()
 {
     uint32_t result = 0;
-    result = set_field_pos<uint32_t>(result, 0x1fU << 8, 8, abstractcs.datacount);
-    result = set_field_pos<uint32_t>(result, 0xffU << 16, 16, abstractcs.progbufsize);
-    result = set_field_pos<uint32_t>(result, 0x1U, 28, abstractcs.busy ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x7U << 8, 8, abstractcs.cmderr);
-    result = set_field_pos<uint32_t>(result, 0xfU << 24, 24, 1);
+    // ABSTRACTCS register layout:
+    // [3:0]   datacount (number of data registers, read-only)
+    // [7:4]   reserved
+    // [10:8]  cmderr (command error)
+    // [11]    reserved
+    // [12]    busy
+    // [23:13] reserved
+    // [28:24] progbufsize (program buffer size, read-only)
+    // [31:29] reserved
+    result |= (abstractcs.datacount & 0xF);           // [3:0]
+    result |= ((abstractcs.cmderr & 0x7) << 8);       // [10:8]
+    if (abstractcs.busy) result |= (1U << 12);        // [12]
+    result |= ((abstractcs.progbufsize & 0x1F) << 24); // [28:24]
     return result;
 }
 
@@ -303,13 +324,18 @@ uint32_t DebugModule::read_authdata()
 
 bool DebugModule::write_dmcontrol(uint32_t value)
 {
+    printf("[DM] write_dmcontrol: value=0x%x, current dmactive=%d\n", value, dmcontrol.dmactive);
+    
     // If setting dmactive from 0 to 1, reset the module
     if (!dmcontrol.dmactive && (value & 1)) {
+        printf("[DM] write_dmcontrol: transitioning dmactive 0->1, calling reset()\n");
         reset();
+        printf("[DM] write_dmcontrol: after reset(), dmactive=%d\n", dmcontrol.dmactive);
     }
     
     // Extract fields
     dmcontrol.dmactive = (value & 0x1) != 0;
+    printf("[DM] write_dmcontrol: after extraction, dmactive=%d\n", dmcontrol.dmactive);
     dmcontrol.ndmreset = (value & (0x1 << 1)) != 0;
     dmcontrol.clrresethaltreq = (value & (0x1 << 2)) != 0;
     dmcontrol.setresethaltreq = (value & (0x1 << 3)) != 0;
@@ -322,25 +348,26 @@ bool DebugModule::write_dmcontrol(uint32_t value)
     dmcontrol.hartsel = (value >> 6) & 0x3ff;
     dmcontrol.hasel = (value & (0x1 << 26)) != 0;
     
-    // Always keep dmactive set for stub
-    dmcontrol.dmactive = true;
+    // Don't force dmactive - let OpenOCD control it for proper reset handshake
+    // dmactive is already extracted from value above
     
-    // Handle halt request (cause = 3 per spec)
+    // Handle halt request
     if (dmcontrol.haltreq) {
-        halt_hart(3);
-        dmcontrol.haltreq = false;
+        halted_ = true;
+        resumeack_ = false;
+        printf("[DM] Halt requested - hart halted\n");
     }
     
     // Handle resume request
     if (dmcontrol.resumereq) {
-        resume_hart(false);
-        dmcontrol.resumereq = false;
+        halted_ = false;
+        resumeack_ = true;
+        printf("[DM] Resume requested - hart running\n");
     }
     
     // Handle ackhavereset
     if (dmcontrol.ackhavereset) {
-        // TODO: Reimplement with Vortex emulator
-        //hart.set_havereset(false);
+        havereset_ = false;
     }
     
     update_dmstatus();
@@ -437,43 +464,53 @@ void DebugModule::execute_command(uint32_t value)
 
 uint32_t DebugModule::read_register(uint16_t regaddr)
 {
-    // TODO: Reimplement with Vortex emulator
+    // For now, use wid=0, tid=0 (first warp, first thread)
+    uint32_t wid = 0;
+    uint32_t tid = 0;
+
     // General purpose registers (x0–x31) at addresses 0x1000–0x101F
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
-        //uint32_t value = hart.get_reg(gpr_index);
-        uint32_t value = 0;  // Stub: return 0 until reimplemented
-        dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x (stub)\n", gpr_index, regaddr, value);
-        return value;
+        vortex::Word value = 0;
+        if (emulator_) {
+            emulator_->debug_read_register(wid, tid, gpr_index, &value, false);
+            dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x (via emulator)\n", gpr_index, regaddr, (uint32_t)value);
+        } else {
+            dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x (no emulator)\n", gpr_index, regaddr, (uint32_t)value);
+        }
+        return static_cast<uint32_t>(value);
     }
 
-    // Program Counter at address 0x1020
-    if (regaddr == 0x1020) {
-        //uint32_t value = hart.get_pc();
-        uint32_t value = 0;  // Stub: return 0 until reimplemented
-        dm_log("[DM] READ REG  pc (0x1020) -> 0x%08x (stub)\n", value);
-        return value;
+    // Floating point registers (f0–f31) at addresses 0x1020–0x103F
+    if (regaddr >= 0x1020 && regaddr <= 0x103F) {
+        int fpr_index = regaddr - 0x1020;
+        vortex::Word value = 0;
+        if (emulator_) {
+            emulator_->debug_read_register(wid, tid, fpr_index, &value, true);
+            dm_log("[DM] READ REG  f%d (0x%04x) -> 0x%016llx (via emulator)\n", fpr_index, regaddr, (unsigned long long)value);
+        } else {
+            dm_log("[DM] READ REG  f%d (0x%04x) -> 0x%016llx (no emulator)\n", fpr_index, regaddr, (unsigned long long)value);
+        }
+        return static_cast<uint32_t>(value);
     }
 
     // Debug Control and Status Register (DCSR) at 0x7B0
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        //uint32_t value = hart.dcsr_to_u32();
-        uint32_t value = 0;  // Stub: return 0 until reimplemented
-        dm_log("[DM] READ REG  dcsr (0x7B0) -> 0x%08x (stub)\n", value);
+        // Return default DCSR value for debug mode
+        uint32_t value = (4 << 28) | (3 << 0);  // xdebugver=4, prv=3
+        dm_log("[DM] READ REG  dcsr (0x7B0) -> 0x%08x (default)\n", value);
         return value;
     }
 
     // Debug Program Counter (DPC) at 0x7B1
     if (regaddr == 0x07b1 || regaddr == 0x7B1) {
-        //uint32_t value = hart.get_dpc();
-        uint32_t value = 0;  // Stub: return 0 until reimplemented
-        dm_log("[DM] READ REG  dpc (0x7B1) -> 0x%08x (stub)\n", value);
-        return value;
+        dm_log("[DM] READ REG  dpc (0x7B1) -> 0x%08x (stub)\n", 0);
+        return 0;
     }
 
-    // CSRs (0xC000–0xFFFF)
-    if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
-        dm_log("[DM] READ REG  csr[0x%04x] (0x%04x) -> 0x00000000\n", regaddr - 0xC000, regaddr);
+    // CSRs (0x0000–0x0FFF)
+    if (regaddr >= 0x0000 && regaddr <= 0x0FFF) {
+        dm_log("[DM] READ REG  csr[0x%03x] -> 0x%08x (stub)\n", regaddr, 0);
         return 0;
     }
 
@@ -483,7 +520,10 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
 
 void DebugModule::write_register(uint16_t regaddr, uint32_t val)
 {
-    // TODO: Reimplement with Vortex emulator
+    // For now, use wid=0, tid=0 (first warp, first thread)
+    uint32_t wid = 0;
+    uint32_t tid = 0;
+
     // General purpose registers (x0–x31) at addresses 0x1000–0x101F
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
@@ -491,35 +531,42 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
             dm_log("[DM] WRITE REG x0 (0x%04x) <- 0x%08x (ignored, x0 is read-only)\n", regaddr, val);
             return;
         }
-        //hart.set_reg(gpr_index, val);
-        dm_log("[DM] WRITE REG x%d (0x%04x) <- 0x%08x (stub, not implemented)\n", gpr_index, regaddr, val);
+        if (emulator_) {
+            emulator_->debug_write_register(wid, tid, gpr_index, val, false);
+            dm_log("[DM] WRITE REG x%d (0x%04x) <- 0x%08x (via emulator)\n", gpr_index, regaddr, val);
+        } else {
+            dm_log("[DM] WRITE REG x%d (0x%04x) <- 0x%08x (no emulator)\n", gpr_index, regaddr, val);
+        }
         return;
     }
 
-    // Program Counter at address 0x1020
-    if (regaddr == 0x1020) {
-        //hart.set_pc(val);
-        dm_log("[DM] WRITE REG pc (0x1020) <- 0x%08x (stub, not implemented)\n", val);
+    // Floating point registers (f0–f31) at addresses 0x1020–0x103F
+    if (regaddr >= 0x1020 && regaddr <= 0x103F) {
+        int fpr_index = regaddr - 0x1020;
+        if (emulator_) {
+            emulator_->debug_write_register(wid, tid, fpr_index, val, true);
+            dm_log("[DM] WRITE REG f%d (0x%04x) <- 0x%08x (via emulator)\n", fpr_index, regaddr, val);
+        } else {
+            dm_log("[DM] WRITE REG f%d (0x%04x) <- 0x%08x (no emulator)\n", fpr_index, regaddr, val);
+        }
         return;
     }
 
     // Debug Control and Status Register (DCSR) at 0x7B0
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        //hart.update_dcsr(val);
-        dm_log("[DM] WRITE REG dcsr (0x7B0) <- 0x%08x (stub, not implemented)\n", val);
+        dm_log("[DM] WRITE REG dcsr (0x7B0) <- 0x%08x (stub)\n", val);
         return;
     }
 
     // Debug Program Counter (DPC) at 0x7B1
     if (regaddr == 0x07b1 || regaddr == 0x7B1) {
-        //hart.set_dpc(val);
-        dm_log("[DM] WRITE REG dpc (0x7B1) <- 0x%08x (stub, not implemented)\n", val);
+        dm_log("[DM] WRITE REG dpc (0x7B1) <- 0x%08x (stub)\n", val);
         return;
     }
 
-    // CSRs (0xC000–0xFFFF)
-    if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
-        dm_log("[DM] WRITE REG csr[0x%04x] (0x%04x) <- 0x%08x (ignored)\n", regaddr - 0xC000, regaddr, val);
+    // CSRs (0x0000–0x0FFF)
+    if (regaddr >= 0x0000 && regaddr <= 0x0FFF) {
+        dm_log("[DM] WRITE REG csr[0x%03x] <- 0x%08x (stub)\n", regaddr, val);
         return;
     }
 
@@ -577,39 +624,31 @@ bool DebugModule::write_memory_block(uint64_t addr, const uint8_t* src, size_t l
 
 void DebugModule::halt_hart(uint8_t cause)
 {
-    dm_log("[DM] Halt requested - hart halted (cause=%u) (stub, not implemented)\n", cause);
-    // TODO: Reimplement with Vortex emulator
-    //hart.enter_debug_mode(cause, hart.get_pc());
+    dm_log("[DM] Halt requested (cause=%u): halted_=%d->1, resumeack_=%d->0\n", 
+           cause, halted_, resumeack_);
+    // TODO: Actually halt the emulator execution
+    halted_ = true;
+    resumeack_ = false;  // Clear resumeack when halted
     update_dmstatus();
 }
 
 void DebugModule::resume_hart(bool single_step)
 {
-    dm_log("[DM] Resume requested (single_step=%d) (stub, not implemented)\n", single_step ? 1 : 0);
-    // TODO: Reimplement with Vortex emulator
-    //hart.set_halted(false);
-    //hart.set_resumeack(false);
-
-    //bool do_step = single_step || hart.is_step_mode();
-    bool do_step = single_step;  // Stub: just use single_step parameter
-    if (do_step) {
-        //hart.step();
-        //dm_log("[HART] Single-step executed, PC=0x%08x\n", hart.get_pc());
-        //hart.enter_debug_mode(4, hart.get_pc());
-        //hart.set_resumeack(true);
-        dm_log("[HART] Single-step not yet implemented\n");
-    } else {
-        dm_log("[HART] Continuous execution resume not yet implemented\n");
-        //hart.set_resumeack(true);
+    dm_log("[DM] Resume requested (single_step=%d)\n", single_step ? 1 : 0);
+    // TODO: Actually resume emulator execution
+    halted_ = false;
+    resumeack_ = true;  // Acknowledge the resume
+    
+    if (single_step) {
+        // TODO: Step one instruction then halt again
+        dm_log("[DM] Single-step: will halt after one instruction (not yet implemented)\n");
     }
     update_dmstatus();
 }
 
 bool DebugModule::hart_is_halted() const
 {
-    // TODO: Reimplement with Vortex emulator
-    //return hart.is_halted();
-    return false;  // Stub: return false until reimplemented
+    return halted_;
 }
 
 void DebugModule::run_test_idle()

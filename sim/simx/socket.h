@@ -69,6 +69,9 @@ public:
 
   void resume(uint32_t core_id);
 
+  // Get emulator for debug access (returns first core's emulator)
+  Emulator* get_emulator();
+
   PerfStats perf_stats() const;
 
 private:

@@ -145,6 +145,10 @@ void Cluster::barrier(uint32_t bar_id, uint32_t count, uint32_t core_id) {
     }
 }
 
+Emulator* Cluster::get_emulator() {
+  return sockets_.at(0)->get_emulator();
+}
+
 Cluster::PerfStats Cluster::perf_stats() const {
   PerfStats perf_stats;
   perf_stats.l2cache = l2cache_->perf_stats();

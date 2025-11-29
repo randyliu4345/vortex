@@ -179,6 +179,9 @@ public:
 
   int get_exitcode() const;
 
+  // Get emulator for debug access
+  Emulator* get_emulator() { return &emulator_; }
+
 private:
 
   void schedule();

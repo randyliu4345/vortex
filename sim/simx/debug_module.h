@@ -4,6 +4,10 @@
 #include <cstdio>
 #include <vector>
 
+namespace vortex {
+class Emulator;
+}
+
 // DMI Register Addresses (RISC-V Debug Spec 0.13)
 #define DM_DATA0           0x04
 #define DM_DMCONTROL       0x10
@@ -105,6 +109,9 @@ class DebugModule {
 public:
     DebugModule(size_t mem_size = 4096);
     
+    // Attach emulator for debug register access
+    void attach_emulator(vortex::Emulator* emulator);
+    
     // DMI interface (used by JTAG DTM)
     bool dmi_read(unsigned address, uint32_t *value);
     bool dmi_write(unsigned address, uint32_t value);
@@ -126,6 +133,13 @@ public:
     void run_test_idle();
 
 private:
+    // Emulator pointer for debug register access
+    vortex::Emulator* emulator_;
+    
+    // Hart state tracking
+    bool halted_;
+    bool resumeack_;
+    bool havereset_;
     // Register state
     dmcontrol_t dmcontrol;
     dmstatus_t dmstatus;

@@ -163,6 +163,10 @@ void Socket::resume(uint32_t core_index) {
   cores_.at(core_index)->resume(-1);
 }
 
+Emulator* Socket::get_emulator() {
+  return cores_.at(0)->get_emulator();
+}
+
 Socket::PerfStats Socket::perf_stats() const {
   PerfStats perf_stats;
   perf_stats.icache = icaches_->perf_stats();

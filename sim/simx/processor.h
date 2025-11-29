@@ -26,6 +26,8 @@ class ProcessorImpl;
 class SATP_t;
 #endif
 
+class Emulator;
+
 class Processor {
 public:
   Processor(const Arch& arch);
@@ -42,6 +44,13 @@ public:
   int get_exitcode() const;
 
   void dcr_write(uint32_t addr, uint32_t value);
+
+  // Get emulator for debug access (returns first core's emulator)
+  Emulator* get_emulator();
+
+  // Tick the RBB server (for debug integration)
+  void rbb_tick();
+
 #ifdef VM_ENABLE
   bool is_satp_unset();
   uint8_t get_satp_mode();

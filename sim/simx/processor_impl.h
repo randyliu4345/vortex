@@ -18,8 +18,13 @@
 #include "constants.h"
 #include "dcrs.h"
 #include "cluster.h"
+#include "debug_module.h"
+#include "jtag_dtm.h"
+#include "remote_bitbang.h"
 
 namespace vortex {
+
+class Emulator;
 
 class ProcessorImpl {
 public:
@@ -46,11 +51,17 @@ public:
 
   void dcr_write(uint32_t addr, uint32_t value);
 
+  // Get emulator for debug access (returns first core's emulator)
+  Emulator* get_emulator();
+
 #ifdef VM_ENABLE
   void set_satp(uint64_t satp);
 #endif
 
   PerfStats perf_stats() const;
+
+  // Tick the RBB server (for debug integration)
+  void rbb_tick();
 
 private:
 
@@ -65,6 +76,11 @@ private:
   uint64_t perf_mem_writes_;
   uint64_t perf_mem_latency_;
   uint64_t perf_mem_pending_reads_;
+
+  // Debug module infrastructure
+  DebugModule* dm_;
+  jtag_dtm_t* dtm_;
+  remote_bitbang_t* rbb_;
 };
 
 }

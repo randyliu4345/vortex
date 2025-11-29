@@ -13,12 +13,16 @@
 
 #include "processor.h"
 #include "processor_impl.h"
+#include <cstdlib>
 
 using namespace vortex;
 
 ProcessorImpl::ProcessorImpl(const Arch& arch)
   : arch_(arch)
   , clusters_(arch.num_clusters())
+  , dm_(nullptr)
+  , dtm_(nullptr)
+  , rbb_(nullptr)
 {
   SimPlatform::instance().initialize();
 
@@ -95,11 +99,42 @@ ProcessorImpl::ProcessorImpl(const Arch& arch)
             << ", num_barriers=" << arch.num_barriers()
             << std::endl;
 #endif
+
+  // Initialize RBB debug server if VX_RBB_PORT environment variable is set
+  const char* rbb_port_str = std::getenv("VX_RBB_PORT");
+  if (rbb_port_str != nullptr) {
+    uint16_t rbb_port = static_cast<uint16_t>(std::atoi(rbb_port_str));
+    if (rbb_port != 0) {
+      std::cout << "========================================" << std::endl;
+      std::cout << "  Vortex Debug Server (RISC-V)" << std::endl;
+      std::cout << "========================================" << std::endl;
+      std::cout << "Listening for Remote Bitbang on port " << rbb_port << "..." << std::endl;
+
+      // Enable verbose logging if VX_RBB_DEBUG is set
+      if (std::getenv("VX_RBB_DEBUG") != nullptr) {
+        DebugModule::set_verbose_logging(true);
+        std::cout << "Debug logging enabled (VX_RBB_DEBUG set)" << std::endl;
+      }
+
+      dm_ = new DebugModule();
+      dm_->attach_emulator(this->get_emulator());
+      dtm_ = new jtag_dtm_t(dm_);
+      rbb_ = new remote_bitbang_t(rbb_port, dtm_);
+    }
+  }
+
   // reset the device
   this->reset();
 }
 
 ProcessorImpl::~ProcessorImpl() {
+  // Cleanup RBB server
+  if (rbb_ != nullptr) {
+    std::cout << "[INFO] Shutting down Remote Bitbang server." << std::endl;
+    delete rbb_;
+    delete dtm_;
+    delete dm_;
+  }
   SimPlatform::instance().finalize();
 }
 
@@ -141,6 +176,12 @@ void ProcessorImpl::tick() {
   perf_mem_latency_ += perf_mem_pending_reads_;
 }
 
+void ProcessorImpl::rbb_tick() {
+  if (rbb_ != nullptr) {
+    rbb_->tick();
+  }
+}
+
 bool ProcessorImpl::is_done() const {
   for (auto cluster : clusters_) {
     if (cluster->running()) {
@@ -167,6 +208,10 @@ void ProcessorImpl::reset() {
 
 void ProcessorImpl::dcr_write(uint32_t addr, uint32_t value) {
   dcrs_.write(addr, value);
+}
+
+Emulator* ProcessorImpl::get_emulator() {
+  return clusters_.at(0)->get_emulator();
 }
 
 ProcessorImpl::PerfStats ProcessorImpl::perf_stats() const {
@@ -230,6 +275,14 @@ int Processor::get_exitcode() const {
 
 void Processor::dcr_write(uint32_t addr, uint32_t value) {
   return impl_->dcr_write(addr, value);
+}
+
+Emulator* Processor::get_emulator() {
+  return impl_->get_emulator();
+}
+
+void Processor::rbb_tick() {
+  impl_->rbb_tick();
 }
 
 #ifdef VM_ENABLE
