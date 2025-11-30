@@ -143,6 +143,14 @@ int main(int argc, char **argv) {
       // Get emulator from processor
       Emulator* emulator = processor.get_first_emulator();
       
+      // Reset emulator to read startup address from DCRs and initialize PC
+      if (emulator != nullptr) {
+        std::cout << "[DEBUG] Resetting emulator to initialize PC from DCRs..." << std::endl;
+        emulator->reset();
+        auto& warp0 = emulator->get_warp(0);
+        std::cout << "[DEBUG] Emulator reset complete. PC = 0x" << std::hex << warp0.PC << std::dec << std::endl;
+      }
+      
       // Create debug module with emulator reference
       DebugModule dm(emulator);
       

@@ -683,14 +683,30 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
     // General purpose registers (x0–x31) at addresses 0x1000–0x101F
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
-        uint32_t value = warp.get_reg(gpr_index);
+        uint32_t value;
+        if (emulator_ != nullptr) {
+            // Use emulator's warp 0, thread 0 register
+            auto& warp0 = emulator_->get_warp(0);
+            value = static_cast<uint32_t>(warp0.ireg_file.at(gpr_index).at(0));
+        } else {
+            // Fallback to standalone warp
+            value = warp.get_reg(gpr_index);
+        }
         dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x\n", gpr_index, regaddr, value);
         return value;
     }
 
 
     if (regaddr == 0x1020) {
-        uint32_t value = warp.get_pc();
+        uint32_t value;
+        if (emulator_ != nullptr) {
+            // Use emulator's warp 0 PC
+            auto& warp0 = emulator_->get_warp(0);
+            value = static_cast<uint32_t>(warp0.PC);
+        } else {
+            // Fallback to standalone warp
+            value = warp.get_pc();
+        }
         dm_log("[DM] READ REG  pc (0x1020) -> 0x%08x\n", value);
         return value;
     }
