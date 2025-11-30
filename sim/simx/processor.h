@@ -22,6 +22,7 @@ namespace vortex {
 class Arch;
 class RAM;
 class ProcessorImpl;
+class Emulator;
 #ifdef VM_ENABLE
 class SATP_t;
 #endif
@@ -36,6 +37,9 @@ public:
   int run();
 
   void dcr_write(uint32_t addr, uint32_t value);
+
+  Emulator* get_first_emulator() const;
+
 #ifdef VM_ENABLE
   bool is_satp_unset();
   uint8_t get_satp_mode();

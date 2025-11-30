@@ -108,6 +108,11 @@ public:
 
   void dcache_write(const void* data, uint64_t addr, uint32_t size);
 
+  // Get warp by index (for debug module access)
+  warp_t& get_warp(uint32_t wid) {
+    return warps_.at(wid);
+  }
+
 private:
 
   uint32_t fetch(uint32_t wid, uint64_t uuid);

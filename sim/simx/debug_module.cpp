@@ -1,0 +1,925 @@
+#include "debug_module.h"
+#include <cstdarg>
+#include <atomic>
+#include <cstring>
+#include "emulator.h"
+
+namespace {
+
+std::atomic<bool> g_debug_module_verbose{false};
+
+void dm_log(const char* fmt, ...) {
+    if (!g_debug_module_verbose.load(std::memory_order_relaxed)) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+}
+
+// Enables or disables verbose logging for debug module operations.
+// Use case: Used to control debug output during development and troubleshooting.
+void DebugModule::set_verbose_logging(bool enable) {
+    g_debug_module_verbose.store(enable, std::memory_order_relaxed);
+    Warp::set_verbose_logging(enable);
+}
+
+bool DebugModule::verbose_logging() {
+    return g_debug_module_verbose.load(std::memory_order_relaxed);
+}
+
+// Constructor: Initializes the RISC-V Debug Module with a simulated memory space.
+// Use case: Creates a debug module instance that implements the RISC-V Debug Specification 0.13.
+DebugModule::DebugModule(vortex::Emulator* emulator, size_t mem_size)
+    : emulator_(emulator),
+      command(0),
+      resumereq_prev(false),
+      data1(0),
+      data2(0),
+      data3(0),
+      memory(mem_size, 0),
+      access_mem_addr(0)
+{
+    for (unsigned i = 0; i < datacount; i++) {
+        dmdata[i] = 0;
+    }
+
+    reset();
+}
+
+// Resets the debug module to its initial state: clears all registers and resets the hart.
+// Use case: Called when dmactive is set from 0 to 1, or during initialization.
+void DebugModule::reset()
+{
+
+    dmcontrol = dmcontrol_t();
+    dmstatus = dmstatus_t();
+    abstractcs = abstractcs_t();
+
+
+    warp = Warp();
+
+    dmcontrol.dmactive = true;
+    dmstatus.authenticated = true;
+    dmstatus.authbusy = false;
+    dmstatus.version = 2;
+
+
+    dmstatus.allnonexistent = false;
+    dmstatus.anynonexistent = false;
+    dmstatus.allunavail = false;
+    dmstatus.anyunavail = false;
+
+    access_mem_addr = 0;
+    access_mem_addr_valid = false;
+
+    update_dmstatus();
+
+
+    dmstatus.authenticated = true;
+    dmstatus.authbusy = false;
+}
+
+// Updates the dmstatus register fields based on current hart state.
+// Use case: Called before reading dmstatus to ensure it reflects current hart state (halted/running/etc.).
+// Preserves authentication state which must remain true for OpenOCD compatibility.
+void DebugModule::update_dmstatus()
+{
+    bool saved_authenticated = dmstatus.authenticated;
+    bool saved_authbusy = dmstatus.authbusy;
+    unsigned saved_version = dmstatus.version;
+
+
+    if (warp.is_halted()) {
+        dmstatus.allhalted = true;
+        dmstatus.anyhalted = true;
+        dmstatus.allrunning = false;
+        dmstatus.anyrunning = false;
+    } else {
+        dmstatus.allhalted = false;
+        dmstatus.anyhalted = false;
+        dmstatus.allrunning = true;
+        dmstatus.anyrunning = true;
+    }
+
+    dmstatus.allresumeack = warp.get_resumeack();
+    dmstatus.anyresumeack = warp.get_resumeack();
+    dmstatus.allhavereset = warp.get_havereset();
+    dmstatus.anyhavereset = warp.get_havereset();
+
+    // Check if selected hartsel (thread) is valid (0-31)
+    // In our implementation, we have 32 threads, so hartsel must be 0-31
+    unsigned thread_id = dmcontrol.hartsel & 0x1F;
+    bool hart_exists = (thread_id < 32);  // We support threads 0-31
+    
+    dmstatus.allnonexistent = !hart_exists;
+    dmstatus.anynonexistent = !hart_exists;
+    dmstatus.allunavail = false;
+    dmstatus.anyunavail = false;
+
+
+    dmstatus.authenticated = saved_authenticated;
+    dmstatus.authbusy = saved_authbusy;
+    dmstatus.version = saved_version;
+}
+
+// Reads a value from a DMI (Debug Module Interface) register by address.
+// Use case: Called by JTAG DTM to read debug module registers (dmcontrol, dmstatus, abstractcs, etc.).
+// Returns true on success, false for unimplemented addresses.
+bool DebugModule::dmi_read(unsigned address, uint32_t *value)
+{
+    switch (address) {
+        case DM_DMCONTROL:
+            *value = read_dmcontrol();
+            break;
+        case DM_DMSTATUS: {
+            update_dmstatus();
+            *value = read_dmstatus();
+            // Log DMSTATUS reads to help debug thread discovery
+            unsigned current_thread = dmcontrol.hartsel & 0x1F;
+            bool exists = (current_thread < 32);
+            dm_log("[DM] DMSTATUS read: hartsel=0x%x (thread=%u), anynonexistent=%d, value=0x%08x\n", 
+                   dmcontrol.hartsel, current_thread, dmstatus.anynonexistent ? 1 : 0, *value);
+
+
+            if (exists) {
+                *value &= ~((1U << 14) | (1U << 15));  // Clear anynonexistent and allnonexistent bits
+            }
+
+            // Ensure authenticated bit (bit 7) is always set - critical for OpenOCD compatibility
+            if ((*value & (1U << 7)) == 0) {
+        dm_log("[DM] ERROR: authenticated bit (bit 7) not set! value=0x%x\n", *value);
+                *value |= (1U << 7);
+            }
+            break;
+        }
+        case DM_HARTINFO:
+            // Hart info: nscratch=1, dataaccess=1, datasize=datacount, dataaddr=0x380
+            *value = (1 << 20) | (1 << 19) | (datacount << 16) | 0x380;
+            break;
+        case DM_ABSTRACTCS:
+            *value = read_abstractcs();
+            break;
+        case DM_COMMAND:
+            *value = 0;
+            break;
+        case DM_ABSTRACTAUTO:
+            *value = 0;
+            break;
+        case DM_DATA0:
+            *value = read_data0();
+            break;
+        case 0x5:  // DATA1
+            *value = data1;
+            break;
+        case 0x6:  // DATA2
+            *value = data2;
+            break;
+        case 0x7:  // DATA3
+            *value = data3;
+            break;
+        case DM_AUTHDATA:
+            *value = read_authdata();
+            break;
+        case DM_SBCS:
+            // System Bus Control and Status: return 0 to indicate no system bus access available
+            // This is optional functionality, so returning 0 is acceptable
+            *value = 0;
+            break;
+        default:
+            *value = 0;
+            dm_log("[DM] DMI READ  addr=0x%x -> 0x%x (unimplemented)\n", address, *value);
+            return false;
+    }
+
+    dm_log("[DM] DMI READ  addr=0x%x -> 0x%x\n", address, *value);
+    return true;
+}
+
+// Writes a value to a DMI (Debug Module Interface) register by address.
+// Use case: Called by JTAG DTM to write debug module registers (dmcontrol, command, data0, etc.).
+// Returns true on success, false for unimplemented addresses.
+bool DebugModule::dmi_write(unsigned address, uint32_t value)
+{
+    dm_log("[DM] DMI WRITE addr=0x%x data=0x%x\n", address, value);
+
+    switch (address) {
+        case DM_DMCONTROL:
+            return write_dmcontrol(value);
+        case DM_COMMAND:
+            return write_command(value);
+        case DM_DATA0:
+            return write_data0(value);
+        case 0x5:  // DATA1
+            data1 = value;
+            dm_log("[DM] DATA1 written: 0x%08x\n", value);
+            return true;
+        case 0x6:  // DATA2
+            data2 = value;
+            dm_log("[DM] DATA2 written: 0x%08x\n", value);
+            return true;
+        case 0x7:  // DATA3
+            data3 = value;
+            dm_log("[DM] DATA3 written: 0x%08x\n", value);
+            return true;
+        case DM_AUTHDATA:
+            return write_authdata(value);
+        case DM_ABSTRACTAUTO:
+            // Auto-execute not implemented in stub
+            return true;
+        case DM_ABSTRACTCS:
+            // Clear command error if writing 1 to error bits (bits [10:8])
+            if (value & (7 << 8)) {
+                abstractcs.cmderr = 0;
+            }
+            return true;
+        case DM_SBCS:
+            // System Bus Control and Status: accept writes but do nothing (no system bus access)
+            return true;
+        default:
+            dm_log("[DM] DMI WRITE addr=0x%x unimplemented\n", address);
+            return false;
+    }
+}
+
+// Reads the dmcontrol register, encoding all control fields into a 32-bit value.
+// Use case: Returns the current debug module control state (dmactive, haltreq, resumereq, hartsel, etc.).
+uint32_t DebugModule::read_dmcontrol()
+{
+    uint32_t result = 0;
+    result = set_field_pos<uint32_t>(result, 0x1U, 0, dmcontrol.dmactive ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 1, dmcontrol.ndmreset ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 2, dmcontrol.clrresethaltreq ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 3, dmcontrol.setresethaltreq ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 16, dmcontrol.hartreset ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 28, dmcontrol.ackhavereset ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 30, dmcontrol.resumereq ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 31, dmcontrol.haltreq ? 1U : 0U);
+
+
+    result = set_field_pos<uint32_t>(result, 0x3ffU << 6, 6, dmcontrol.hartsel);
+    result = set_field_pos<uint32_t>(result, 0x1U, 26, dmcontrol.hasel ? 1U : 0U);
+
+
+    result |= 1;
+
+    return result;
+}
+
+// Reads the dmstatus register, encoding all status fields into a 32-bit value per RISC-V Debug Spec 0.13.2.
+// Use case: Returns the current debug module status (version, authenticated, halted/running state, etc.).
+// Always ensures authenticated bit (bit 7) is set - critical for OpenOCD compatibility.
+uint32_t DebugModule::read_dmstatus()
+{
+
+    dmstatus.authenticated = true;
+    dmstatus.authbusy = false;
+
+    uint32_t result = 0;
+
+
+
+    result |= (dmstatus.version & 0xf);
+
+
+    if (dmstatus.confstrptrvalid) result |= (1U << 4);
+
+
+    if (dmstatus.hasresethaltreq) result |= (1U << 5);
+
+
+
+
+
+    result |= (1U << 7);
+
+
+    if (dmstatus.anyhalted) result |= (1U << 8);
+
+
+    if (dmstatus.allhalted) result |= (1U << 9);
+
+
+    if (dmstatus.anyrunning) result |= (1U << 10);
+
+
+    if (dmstatus.allrunning) result |= (1U << 11);
+
+
+    if (dmstatus.anyunavail) result |= (1U << 12);
+
+
+    if (dmstatus.allunavail) result |= (1U << 13);
+
+
+    if (dmstatus.anynonexistent) result |= (1U << 14);
+
+
+    if (dmstatus.allnonexistent) result |= (1U << 15);
+
+
+    if (dmstatus.anyresumeack) result |= (1U << 16);
+
+
+    if (dmstatus.allresumeack) result |= (1U << 17);
+
+
+    if (dmstatus.anyhavereset) result |= (1U << 18);
+
+
+    if (dmstatus.allhavereset) result |= (1U << 19);
+
+
+
+
+    if (dmstatus.impebreak) result |= (1U << 22);
+
+
+
+
+    if ((result & (1U << 7)) == 0) {
+        dm_log("[DM] ERROR: authenticated bit (bit 7) not set! result=0x%x\n", result);
+        result |= (1U << 7);
+    }
+
+    return result;
+}
+
+// Reads the abstractcs register, encoding abstract command status fields.
+// Use case: Returns abstract command status (datacount, progbufsize, busy flag, cmderr).
+uint32_t DebugModule::read_abstractcs()
+{
+    uint32_t result = 0;
+    result = set_field_pos<uint32_t>(result, 0x1fU << 8, 8, abstractcs.datacount);
+    result = set_field_pos<uint32_t>(result, 0xffU << 16, 16, abstractcs.progbufsize);
+    result = set_field_pos<uint32_t>(result, 0x1U, 28, abstractcs.busy ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x7U << 8, 8, abstractcs.cmderr);
+    result = set_field_pos<uint32_t>(result, 0xfU << 24, 24, 1);
+    return result;
+}
+
+// Reads the DATA0 register value (used for abstract command data transfer).
+// Use case: Returns the value stored in DATA0, typically used to read register/memory values.
+uint32_t DebugModule::read_data0()
+{
+    uint32_t value = dmdata[0];
+    dm_log("[DM] DATA0 read: 0x%08x\n", value);
+    return value;
+}
+
+// Reads the authdata register (authentication not implemented in stub).
+// Use case: Returns 0 since authentication protocol is not implemented.
+uint32_t DebugModule::read_authdata()
+{
+    return 0;
+}
+
+// Writes the dmcontrol register, updating control fields and processing requests (halt/resume).
+// Use case: Called to control the debug module (halt/resume hart, select hart, reset, etc.).
+// Processes haltreq and resumereq immediately, and resets module if dmactive transitions from 0 to 1.
+bool DebugModule::write_dmcontrol(uint32_t value)
+{
+    // If setting dmactive from 0 to 1, reset the module
+    if (!dmcontrol.dmactive && (value & 1)) {
+        reset();
+    }
+
+
+    dmcontrol.dmactive = (value & 0x1) != 0;
+    dmcontrol.ndmreset = (value & (0x1 << 1)) != 0;
+    dmcontrol.clrresethaltreq = (value & (0x1 << 2)) != 0;
+    dmcontrol.setresethaltreq = (value & (0x1 << 3)) != 0;
+    dmcontrol.hartreset = (value & (0x1 << 16)) != 0;
+    dmcontrol.ackhavereset = (value & (0x1 << 28)) != 0;
+    dmcontrol.resumereq = (value & (0x1 << 30)) != 0;
+    dmcontrol.haltreq = (value & (0x1 << 31)) != 0;
+
+
+    // Extract hartsel (hart selection) and hasel (hart array select) fields
+    dmcontrol.hartsel = (value >> 6) & 0x3ff;
+    dmcontrol.hasel = (value & (0x1 << 26)) != 0;
+
+    // Use lower 5 bits of hartsel to select thread within warp (0-31)
+    unsigned thread_id = dmcontrol.hartsel & 0x1F;
+    if (thread_id < 32) {
+        warp.set_current_thread(thread_id);
+        dm_log("[DM] Thread selection: hartsel=0x%x, selected thread=%u\n", dmcontrol.hartsel, thread_id);
+    } else {
+        dm_log("[DM] Invalid thread selection: hartsel=0x%x, thread_id=%u (max 31)\n", dmcontrol.hartsel, thread_id);
+    }
+
+    // Always keep dmactive set for stub (always active)
+    dmcontrol.dmactive = true;
+
+    // Handle halt request immediately (cause = 3 per spec)
+    if (dmcontrol.haltreq) {
+        halt_hart(3);
+        dmcontrol.haltreq = false;
+    }
+
+
+
+
+    if (dmcontrol.resumereq && !resumereq_prev) {
+
+
+        warp.set_resumeack(false);
+        resume_hart(false);
+    }
+
+    resumereq_prev = dmcontrol.resumereq;
+
+
+    if (dmcontrol.ackhavereset) {
+        warp.set_havereset(false);
+    }
+
+    update_dmstatus();
+    return true;
+}
+
+// Writes the abstract command register and executes the command if not busy.
+// Use case: Called to execute abstract commands (e.g., access register, quick access).
+// Returns false if busy, otherwise executes command and returns true.
+bool DebugModule::write_command(uint32_t value)
+{
+    command = value;
+    dm_log("[DM] COMMAND written: 0x%08x\n", value);
+
+
+    // Execute command immediately if not busy (stub implementation)
+    if (!abstractcs.busy) {
+        return perform_abstract_command();
+    } else {
+        abstractcs.cmderr = 1;  // BUSY error
+        dm_log("[DM] COMMAND error: BUSY (cmderr=1)\n");
+        return false;
+    }
+}
+
+// Writes the DATA0 register value (used for abstract command data transfer).
+// Use case: Called to set data for abstract commands (e.g., register value to write).
+bool DebugModule::write_data0(uint32_t value)
+{
+    dmdata[0] = value;
+    dm_log("[DM] DATA0 written: 0x%08x\n", value);
+    return true;
+}
+
+// Writes the authdata register (authentication not implemented in stub).
+// Use case: Accepts any authdata write and marks as authenticated (stub always authenticates).
+bool DebugModule::write_authdata(uint32_t)
+{
+    dmstatus.authenticated = true;
+    dmstatus.authbusy = false;
+    return true;
+}
+
+// Performs the abstract command stored in the command register.
+// Use case: Executes abstract commands (supports Access Register cmdtype=0 and Access Memory cmdtype=0x02).
+// Returns false if busy or unsupported command type, sets cmderr accordingly.
+bool DebugModule::perform_abstract_command()
+{
+    if (abstractcs.busy) {
+        abstractcs.cmderr = 1;
+        dm_log("[DM] COMMAND error: BUSY (cmderr=1)\n");
+        return false;
+    }
+
+
+    unsigned cmdtype = (command >> 24) & 0xff;
+
+    if (cmdtype == 0 || cmdtype == 0x02) {
+        // Access Register (cmdtype=0) or Access Memory (cmdtype=0x02)
+        abstractcs.busy = true;
+        execute_command(command);
+        abstractcs.busy = false;
+        return true;
+    } else {
+        abstractcs.cmderr = 2;
+        dm_log("[DM] COMMAND error: NOTSUP (cmderr=2), cmdtype=0x%02x\n", cmdtype);
+        return false;
+    }
+}
+
+// Executes an abstract command (supports Access Register and Access Memory commands).
+// Use case: Processes abstract commands to read/write hart registers or memory, optionally with postexec step.
+// Command format: [cmdtype][aarsize/aamsize][postexec][transfer][write][regaddr/aamaddress]
+void DebugModule::execute_command(uint32_t value)
+{
+    uint8_t cmdtype = (value >> 24) & 0xFF;
+    if (cmdtype == 0) {
+        // Access Register command
+        uint8_t aarsize = (value >> 20) & 0x7;
+        bool postexec   = value & (1 << 18);
+        bool transfer   = value & (1 << 17);
+        bool write      = value & (1 << 16);
+        uint16_t regaddr  = value & 0xFFFF;
+
+        dm_log("[DM] EXECUTE COMMAND: Access Register, regaddr=0x%04x, write=%d, transfer=%d, postexec=%d, aarsize=%d\n",
+               regaddr, write ? 1 : 0, transfer ? 1 : 0, postexec ? 1 : 0, aarsize);
+
+        if (transfer) {
+            if (write) {
+                write_register(regaddr, data0());
+            } else {
+                data0() = read_register(regaddr);
+            }
+        }
+
+        if (postexec) {
+            uint32_t pc = warp.get_pc();
+            
+            // Check for software breakpoint: if instruction at PC is EBREAK, halt
+            uint32_t instruction = read_mem(pc);
+            if (instruction == 0x00100073) {
+                // EBREAK instruction - software breakpoint
+                dm_log("[DM] Software breakpoint hit at 0x%08x (EBREAK), halting hart\n", pc);
+                halt_hart(1);  // Cause 1 = ebreak instruction
+                return;  // Don't execute the instruction
+            }
+            
+            warp.step();
+            dm_log("[DM] STEP: PC incremented by 4, new PC=0x%08x\n", warp.get_pc());
+        }
+    } else if (cmdtype == 0x02) {
+        // Access Memory command (per updated RISC-V Debug Spec)
+        // Fields:
+        // [31:24] cmdtype (0x02)
+        // [23]    aamvirtual
+        // [22:20] aamsize (0=8-bit, 1=16-bit, 2=32-bit, 3=64-bit)
+        // [19]    aampostincrement
+        // [18:17] 0
+        // [16]    write (1=write, 0=read)
+        // [15:14] target-specific-info
+        // [13:0]  0
+
+        uint8_t aamvirtual       = (value >> 23) & 0x1;   // currently unused
+        uint8_t aamsize          = (value >> 20) & 0x7;
+        bool    aampostincrement = ((value >> 19) & 0x1) != 0;
+        bool    write            = ((value >> 16) & 0x1) != 0;
+        (void)aamvirtual; // suppress unused warning for now
+
+        size_t access_size = (aamsize == 0) ? 1 :
+                             (aamsize == 1) ? 2 :
+                             (aamsize == 2) ? 4 : 8;
+
+        // Decide base address and remember where it came from so we can apply postincrement correctly.
+        enum AddrSource {
+            ADDR_NONE,
+            ADDR_DATA2,
+            ADDR_DATA1,
+            ADDR_DATA0,
+            ADDR_PREV
+        } addr_src = ADDR_NONE;
+
+        uint32_t mem_addr = 0;
+
+        // If this looks like a continuation of a postincrement sequence (no explicit address
+        // in DATA[0-2]), reuse the last address.
+        if (aampostincrement &&
+            access_mem_addr_valid &&
+            data2 == 0 && data1 == 0 && data0() == 0) {
+            mem_addr = access_mem_addr;
+            addr_src = ADDR_PREV;
+        } else if (data2 != 0) {
+            mem_addr = data2;
+            addr_src = ADDR_DATA2;
+        } else if (data1 != 0) {
+            mem_addr = data1;
+            addr_src = ADDR_DATA1;
+        } else if (data0() != 0) {
+            mem_addr = data0();
+            addr_src = ADDR_DATA0;
+        } else if (access_mem_addr_valid) {
+            // Fallback to previous address if we have one.
+            mem_addr = access_mem_addr;
+            addr_src = ADDR_PREV;
+        } else {
+            mem_addr = 0;
+            addr_src = ADDR_NONE;
+        }
+
+        dm_log("[DM] EXECUTE COMMAND: Access Memory, addr=0x%08x, write=%d, aamsize=%u, postinc=%d\n",
+               mem_addr, write ? 1 : 0, aamsize, aampostincrement ? 1 : 0);
+
+        // Always perform one memory access per command.
+        if (write) {
+            // Write memory: DATA0 contains the data to write
+            uint32_t write_data = data0();
+
+            dm_log("[DM] Access Memory WRITE: addr=0x%08x, data=0x%08x, size=%zu\n",
+                   mem_addr, write_data, access_size);
+
+            if (access_size == 1) {
+                uint32_t old_val = read_mem(mem_addr);
+                write_mem(mem_addr, (old_val & ~0xFF) | (write_data & 0xFF));
+            } else if (access_size == 2) {
+                uint32_t old_val = read_mem(mem_addr);
+                write_mem(mem_addr, (old_val & ~0xFFFF) | (write_data & 0xFFFF));
+            } else if (access_size == 4) {
+                write_mem(mem_addr, write_data);
+            } else {
+                dm_log("[DM] Access Memory: unsupported write size %zu\n", access_size);
+            }
+        } else {
+            // Read memory: result goes into DATA0
+            uint32_t read_val = read_mem(mem_addr);
+
+            if (access_size == 1) {
+                data0() = read_val & 0xFF;
+            } else if (access_size == 2) {
+                data0() = read_val & 0xFFFF;
+            } else if (access_size == 4) {
+                data0() = read_val;
+            } else {
+                dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
+                data0() = 0;
+            }
+        }
+
+        // Implement aampostincrement: advance the address and write it back to the same source.
+        uint32_t new_addr = mem_addr;
+        if (aampostincrement) {
+            new_addr = mem_addr + access_size;
+            switch (addr_src) {
+                case ADDR_DATA2:
+                    data2 = new_addr;
+                    break;
+                case ADDR_DATA1:
+                    data1 = new_addr;
+                    break;
+                case ADDR_DATA0:
+                    data0() = new_addr;
+                    break;
+                case ADDR_NONE:
+                case ADDR_PREV:
+                default:
+                    // When address came from a previous implicit address sequence,
+                    // follow the spec and leave the updated address in DATA0.
+                    data0() = new_addr;
+                    break;
+            }
+            access_mem_addr = new_addr;
+            access_mem_addr_valid = true;
+        } else {
+            access_mem_addr = mem_addr;
+            access_mem_addr_valid = true;
+        }
+    } else {
+        abstractcs.cmderr = 2;  // NOTSUP
+        dm_log("[DM] COMMAND error: NOTSUP (cmderr=2), cmdtype=0x%02x\n", cmdtype);
+    }
+}
+
+// Reads a hart register by abstract register address (used by access register commands).
+// Use case: Called during abstract command execution to read GPRs, PC, DCSR, DPC, or CSRs.
+// Register address mapping: 0x1000-0x101F (GPRs), 0x1020 (PC), 0x7B0 (DCSR), 0x7B1 (DPC), 0x0000-0x0FFF/0xC000-0xFFFF (CSRs).
+uint32_t DebugModule::read_register(uint16_t regaddr)
+{
+    // General purpose registers (x0–x31) at addresses 0x1000–0x101F
+    if (regaddr >= 0x1000 && regaddr <= 0x101F) {
+        int gpr_index = regaddr - 0x1000;
+        uint32_t value = warp.get_reg(gpr_index);
+        dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x\n", gpr_index, regaddr, value);
+        return value;
+    }
+
+
+    if (regaddr == 0x1020) {
+        uint32_t value = warp.get_pc();
+        dm_log("[DM] READ REG  pc (0x1020) -> 0x%08x\n", value);
+        return value;
+    }
+
+
+    if (regaddr == 0x07b0 || regaddr == 0x7B0) {
+        uint32_t value = warp.dcsr_to_u32();
+        dm_log("[DM] READ REG  dcsr (0x7B0) -> 0x%08x\n", value);
+        return value;
+    }
+
+
+    if (regaddr == 0x07b1 || regaddr == 0x7B1) {
+        uint32_t value = warp.get_dpc();
+        dm_log("[DM] READ REG  dpc (0x7B1) -> 0x%08x\n", value);
+        return value;
+    }
+
+
+
+    if (regaddr >= 0x0000 && regaddr <= 0x0FFF) {
+        uint16_t csr_num = regaddr;
+
+        if (csr_num == 0x0301) {
+            uint32_t value = 0x80001100;
+            dm_log("[DM] READ REG  misa (0x0301) -> 0x%08x (RV64IM)\n", value);
+            return value;
+        }
+
+        if (csr_num == 0x0c22) {
+            uint32_t value = 0;
+            dm_log("[DM] READ REG  vlenb (0x0c22) -> 0x%08x (no vector support)\n", value);
+            return value;
+        }
+        dm_log("[DM] READ REG  csr[0x%03x] (0x%04x) -> 0x00000000\n", csr_num, regaddr);
+        return 0;
+    }
+
+
+    if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
+        uint16_t csr_num = regaddr - 0xC000;
+
+
+        if (csr_num == 0x0301) {
+            uint32_t value = 0x80001100;
+            dm_log("[DM] READ REG  misa (0x%04x) -> 0x%08x (RV64IM)\n", regaddr, value);
+            return value;
+        }
+
+        if (csr_num == 0x0c22) {
+            uint32_t value = 0;
+            dm_log("[DM] READ REG  vlenb (0x%04x) -> 0x%08x (no vector support)\n", regaddr, value);
+            return value;
+        }
+
+        dm_log("[DM] READ REG  csr[0x%03x] (0x%04x) -> 0x00000000\n", csr_num, regaddr);
+        return 0;
+    }
+
+
+    dm_log("[DM] READ REG unknown regaddr=0x%04x -> 0x00000000\n", regaddr);
+    return 0;
+}
+
+void DebugModule::write_register(uint16_t regaddr, uint32_t val)
+{
+
+    if (regaddr >= 0x1000 && regaddr <= 0x101F) {
+        int gpr_index = regaddr - 0x1000;
+        if (gpr_index == 0) {
+            dm_log("[DM] WRITE REG x0 (0x%04x) <- 0x%08x (ignored, x0 is read-only)\n", regaddr, val);
+            return;
+        }
+        warp.set_reg(gpr_index, val);
+        dm_log("[DM] WRITE REG x%d (0x%04x) <- 0x%08x\n", gpr_index, regaddr, val);
+        return;
+    }
+
+
+    if (regaddr == 0x1020) {
+        warp.set_pc(val);
+        dm_log("[DM] WRITE REG pc (0x1020) <- 0x%08x\n", val);
+        return;
+    }
+
+
+    if (regaddr == 0x07b0 || regaddr == 0x7B0) {
+        warp.update_dcsr(val);
+        dm_log("[DM] WRITE REG dcsr (0x7B0) <- 0x%08x\n", val);
+        return;
+    }
+
+
+    if (regaddr == 0x07b1 || regaddr == 0x7B1) {
+        warp.set_dpc(val);
+        dm_log("[DM] WRITE REG dpc (0x7B1) <- 0x%08x\n", val);
+        return;
+    }
+
+
+    if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
+        dm_log("[DM] WRITE REG csr[0x%04x] (0x%04x) <- 0x%08x (ignored)\n", regaddr - 0xC000, regaddr, val);
+        return;
+    }
+
+    dm_log("[DM] WRITE REG unknown regaddr=0x%04x <- 0x%08x (ignored)\n", regaddr, val);
+}
+
+uint32_t DebugModule::read_mem(uint64_t addr)
+{
+    if (addr + 4 > memory.size()) {
+        dm_log("[DM] READ MEM  addr=0x%llx -> OUT OF BOUNDS\n", (unsigned long long)addr);
+        return 0;
+    }
+    uint32_t val = *(uint32_t*)&memory[addr];
+    dm_log("[DM] READ MEM  addr=0x%llx -> 0x%x\n", (unsigned long long)addr, val);
+    return val;
+}
+
+void DebugModule::write_mem(uint64_t addr, uint32_t val)
+{
+    if (addr + 4 > memory.size()) {
+        dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x OUT OF BOUNDS\n", (unsigned long long)addr, val);
+        return;
+    }
+    *(uint32_t*)&memory[addr] = val;
+    dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x\n", (unsigned long long)addr, val);
+}
+
+uint32_t DebugModule::direct_read_register(uint16_t regaddr)
+{
+    return read_register(regaddr);
+}
+
+void DebugModule::direct_write_register(uint16_t regaddr, uint32_t value)
+{
+    write_register(regaddr, value);
+}
+
+bool DebugModule::read_memory_block(uint64_t addr, uint8_t* dest, size_t len) const
+{
+    if (addr + len > memory.size()) {
+        return false;
+    }
+    std::memcpy(dest, memory.data() + addr, len);
+    return true;
+}
+
+bool DebugModule::write_memory_block(uint64_t addr, const uint8_t* src, size_t len)
+{
+    if (addr + len > memory.size()) {
+        return false;
+    }
+    std::memcpy(memory.data() + addr, src, len);
+    return true;
+}
+
+
+// Halts the hart (CPU core) and enters debug mode with the specified cause.
+// Use case: Called when debugger requests a halt or a breakpoint is hit.
+// Cause values: 0=reserved, 1=ebreak, 2=trigger, 3=haltreq, 4=step, 5=resume after step, etc.
+void DebugModule::halt_hart(uint8_t cause)
+{
+    dm_log("[DM] Halt requested - hart halted (cause=%u)\n", cause);
+    warp.enter_debug_mode(cause, warp.get_pc());
+    update_dmstatus();
+    // Log DCSR value after setting cause to verify encoding
+    uint32_t dcsr_val = warp.dcsr_to_u32();
+    uint8_t cause_field = (dcsr_val >> 8) & 0xF;
+    dm_log("[DM] DCSR after halt: 0x%08x, cause field: 0x%x (should be 0x%x)\n", dcsr_val, cause_field, cause);
+}
+
+// Resumes the hart execution, optionally in single-step mode.
+// Use case: Called when debugger requests resume or step execution.
+// If single_step is true or hart is in step mode, executes one instruction then halts again.
+void DebugModule::resume_hart(bool single_step)
+{
+    dm_log("[DM] Resume requested (single_step=%d)\n", single_step ? 1 : 0);
+    warp.set_halted(false);
+
+    bool do_step = single_step || warp.is_step_mode();
+    if (do_step) {
+        warp.step();
+        dm_log("[WARP] Single-step executed, PC=0x%08x\n", warp.get_pc());
+        warp.enter_debug_mode(4, warp.get_pc());
+
+
+
+        warp.set_resumeack(true);
+    } else {
+        dm_log("[HART] Continuous execution resumed\n");
+        warp.set_resumeack(true);
+    }
+    update_dmstatus();
+}
+
+bool DebugModule::hart_is_halted() const
+{
+    return warp.is_halted();
+}
+
+// Called periodically when JTAG is in Run-Test-Idle state.
+// Use case: Allows the debug module to process state updates during idle periods.
+// When the hart is running continuously, this simulates instruction execution by advancing PC
+// and checking for breakpoints.
+void DebugModule::run_test_idle()
+{
+    // If hart is running continuously, execute instructions until we hit a breakpoint
+    if (!warp.is_halted()) {
+        // Execute one instruction: read instruction at PC, check for breakpoint, advance PC
+        uint32_t pc = warp.get_pc();
+        uint32_t instruction = read_mem(pc);
+        
+        dm_log("[DM] run_test_idle: hart running, PC=0x%08x, instruction=0x%08x\n", pc, instruction);
+        
+        // Check for both 32-bit EBREAK (0x00100073) and compressed EBREAK (0x9002)
+        // Compressed EBREAK appears as 0x00009002 when read as 32-bit (little-endian)
+        if (instruction == 0x00100073 || (instruction & 0xFFFF) == 0x9002) {
+            // EBREAK instruction - software breakpoint hit
+            dm_log("[DM] Software breakpoint hit at 0x%08x during execution (EBREAK), halting hart\n", pc);
+            halt_hart(1);  // Cause 1 = ebreak instruction
+        } else {
+            // Execute the instruction (for now, just advance PC by 4)
+            // In a real implementation, this would decode and execute the instruction
+            warp.step();
+            dm_log("[DM] Executed instruction at 0x%08x, PC now 0x%08x\n", pc, warp.get_pc());
+        }
+    } else {
+        dm_log("[DM] run_test_idle: hart is halted, nothing to do\n");
+    }
+}
+
