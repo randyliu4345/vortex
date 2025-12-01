@@ -95,7 +95,7 @@ void DebugModule::update_dmstatus()
     bool saved_authbusy = dmstatus.authbusy;
     unsigned saved_version = dmstatus.version;
 
-
+    // Check running state - emulator notifies us when program completes, so we just check our flags
     if (is_halted_ || halt_requested_) {
         dmstatus.allhalted = true;
         dmstatus.anyhalted = true;
@@ -1001,6 +1001,23 @@ void DebugModule::remove_breakpoint(uint32_t addr)
     // Restore the original instruction
     write_program_memory(addr, it->second);
     software_breakpoints_.erase(it);
+}
+
+// Notification from emulator when program completes naturally
+void DebugModule::notify_program_completed(uint32_t final_pc)
+{
+    // Only process if we weren't already explicitly halted
+    if (!is_halted_ && !halt_requested_) {
+        dm_log("[DM] Program completed naturally at PC=0x%08x, halting hart\n", final_pc);
+        
+        // Update DPC to final PC
+        direct_write_register(0x7B1, final_pc);
+        
+        // Mark as halted (cause 0 = reserved, but we use it for natural completion)
+        is_halted_ = true;
+        set_halt_requested(true);
+        dcsr_.cause = 0;  // Natural completion
+    }
 }
 
 // Called periodically when JTAG is in Run-Test-Idle state.

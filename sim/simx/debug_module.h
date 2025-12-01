@@ -160,6 +160,9 @@ public:
     bool has_breakpoint(uint32_t addr) const;
     void add_breakpoint(uint32_t addr);
     void remove_breakpoint(uint32_t addr);
+    
+    // Notification from emulator when program completes
+    void notify_program_completed(uint32_t final_pc);
 
 private:
 
