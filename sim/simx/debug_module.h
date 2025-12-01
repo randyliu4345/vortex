@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <vector>
 #include <set>
-#include "warp.h"
+#include <map>
 
 namespace vortex {
     class Emulator;
@@ -146,6 +146,20 @@ public:
     // Use case: Allows the debug module to process state updates during idle periods.
     void run_test_idle();
 
+    // Debug flag query methods (read-only)
+    bool is_halt_requested() const;
+    bool is_single_step_active() const;
+    bool is_debug_mode_enabled() const;
+    
+    // Debug flag control methods (set flags)
+    void set_halt_requested(bool halt);
+    void set_single_step_active(bool step);
+    void set_debug_mode_enabled(bool enabled);
+    
+    // Software breakpoint management
+    bool has_breakpoint(uint32_t addr) const;
+    void add_breakpoint(uint32_t addr);
+    void remove_breakpoint(uint32_t addr);
 
 private:
 
@@ -154,9 +168,73 @@ private:
     abstractcs_t abstractcs;
 
     vortex::Emulator* emulator_;
-    Warp warp;
+    
+    // Debug state flags
+    bool halt_requested_;
+    bool single_step_active_;
+    bool debug_mode_enabled_;
+    
+    // Debug Control and Status Register (DCSR)
+    struct DCSR {
+        uint32_t prv       : 2;
+        uint32_t step      : 1;
+        uint32_t ebreakm   : 1;
+        uint32_t ebreaks   : 1;
+        uint32_t ebreaku   : 1;
+        uint32_t stopcount : 1;
+        uint32_t stoptime  : 1;
+        uint32_t cause     : 4;
+        uint32_t mprven    : 1;
+        uint32_t nmip      : 1;
+        uint32_t reserved  : 14;
+        uint32_t xdebugver : 4;
 
+        DCSR() : prv(3), step(0), ebreakm(0), ebreaks(0), ebreaku(0),
+                 stopcount(0), stoptime(0), cause(0), mprven(0),
+                 nmip(0), reserved(0), xdebugver(4) {}
 
+        uint32_t to_u32() const {
+            uint32_t value = 0;
+            value |= (prv & 0x3);
+            value |= (step & 0x1) << 2;
+            value |= (ebreakm & 0x1) << 3;
+            value |= (ebreaks & 0x1) << 4;
+            value |= (ebreaku & 0x1) << 5;
+            value |= (stopcount & 0x1) << 6;
+            value |= (stoptime & 0x1) << 7;
+            value |= (cause & 0xF) << 8;
+            value |= (mprven & 0x1) << 12;
+            value |= (nmip & 0x1) << 13;
+            value |= (xdebugver & 0xF) << 28;
+            return value;
+        }
+
+        void from_u32(uint32_t value) {
+            prv       = value & 0x3;
+            step      = (value >> 2) & 0x1;
+            ebreakm   = (value >> 3) & 0x1;
+            ebreaks   = (value >> 4) & 0x1;
+            ebreaku   = (value >> 5) & 0x1;
+            stopcount = (value >> 6) & 0x1;
+            stoptime  = (value >> 7) & 0x1;
+            cause     = (value >> 8) & 0xF;
+            mprven    = (value >> 12) & 0x1;
+            nmip      = (value >> 13) & 0x1;
+            xdebugver = 4;
+            reserved  = 0;
+        }
+    } dcsr_;
+    
+    // Debug Program Counter (DPC) - PC value when entering debug mode
+    uint32_t dpc_;
+    
+    // Debug state tracking
+    bool resumeack_;
+    bool havereset_;
+    bool is_halted_;
+    
+    // Software breakpoint storage: address -> original instruction
+    std::map<uint32_t, uint32_t> software_breakpoints_;
 
     static constexpr unsigned datacount = 1;
     uint32_t dmdata[datacount];
@@ -198,6 +276,10 @@ private:
 
     uint32_t read_mem(uint64_t addr);
     void write_mem(uint64_t addr, uint32_t val);
+    
+    // Program memory access (via emulator)
+    uint32_t read_program_memory(uint32_t addr) const;
+    void write_program_memory(uint32_t addr, uint32_t value);
 
 
     uint32_t read_dmcontrol();

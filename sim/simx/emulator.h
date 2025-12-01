@@ -27,6 +27,8 @@
 #include "vec_unit.h"
 #endif
 
+class DebugModule;  // Forward declaration (global scope)
+
 namespace vortex {
 
 class Arch;
@@ -113,6 +115,10 @@ public:
     return warps_.at(wid);
   }
 
+  // Debug module interface
+  void set_debug_module(::DebugModule* dm);
+  ::DebugModule* get_debug_module() const;
+
 private:
 
   uint32_t fetch(uint32_t wid, uint64_t uuid);
@@ -149,6 +155,7 @@ private:
   const Arch& arch_;
   const DCRS& dcrs_;
   Core*       core_;
+  ::DebugModule* debug_module_;
 
   std::vector<warp_t> warps_;
   WarpMask    active_warps_;

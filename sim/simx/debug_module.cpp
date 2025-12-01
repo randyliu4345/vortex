@@ -24,7 +24,6 @@ void dm_log(const char* fmt, ...) {
 // Use case: Used to control debug output during development and troubleshooting.
 void DebugModule::set_verbose_logging(bool enable) {
     g_debug_module_verbose.store(enable, std::memory_order_relaxed);
-    Warp::set_verbose_logging(enable);
 }
 
 bool DebugModule::verbose_logging() {
@@ -41,7 +40,10 @@ DebugModule::DebugModule(vortex::Emulator* emulator, size_t mem_size)
       data2(0),
       data3(0),
       memory(mem_size, 0),
-      access_mem_addr(0)
+      access_mem_addr(0),
+      halt_requested_(false),
+      single_step_active_(false),
+      debug_mode_enabled_(false)
 {
     for (unsigned i = 0; i < datacount; i++) {
         dmdata[i] = 0;
@@ -54,19 +56,21 @@ DebugModule::DebugModule(vortex::Emulator* emulator, size_t mem_size)
 // Use case: Called when dmactive is set from 0 to 1, or during initialization.
 void DebugModule::reset()
 {
-
     dmcontrol = dmcontrol_t();
     dmstatus = dmstatus_t();
     abstractcs = abstractcs_t();
 
-
-    warp = Warp();
+    // Initialize debug state
+    dcsr_ = DCSR();
+    dpc_ = 0;
+    resumeack_ = false;
+    havereset_ = false;
+    is_halted_ = false;
 
     dmcontrol.dmactive = true;
     dmstatus.authenticated = true;
     dmstatus.authbusy = false;
     dmstatus.version = 2;
-
 
     dmstatus.allnonexistent = false;
     dmstatus.anynonexistent = false;
@@ -77,7 +81,6 @@ void DebugModule::reset()
     access_mem_addr_valid = false;
 
     update_dmstatus();
-
 
     dmstatus.authenticated = true;
     dmstatus.authbusy = false;
@@ -93,7 +96,7 @@ void DebugModule::update_dmstatus()
     unsigned saved_version = dmstatus.version;
 
 
-    if (warp.is_halted()) {
+    if (is_halted_ || halt_requested_) {
         dmstatus.allhalted = true;
         dmstatus.anyhalted = true;
         dmstatus.allrunning = false;
@@ -105,10 +108,10 @@ void DebugModule::update_dmstatus()
         dmstatus.anyrunning = true;
     }
 
-    dmstatus.allresumeack = warp.get_resumeack();
-    dmstatus.anyresumeack = warp.get_resumeack();
-    dmstatus.allhavereset = warp.get_havereset();
-    dmstatus.anyhavereset = warp.get_havereset();
+    dmstatus.allresumeack = resumeack_;
+    dmstatus.anyresumeack = resumeack_;
+    dmstatus.allhavereset = havereset_;
+    dmstatus.anyhavereset = havereset_;
 
     // Check if selected hartsel (thread) is valid (0-31)
     // In our implementation, we have 32 threads, so hartsel must be 0-31
@@ -397,16 +400,15 @@ bool DebugModule::write_dmcontrol(uint32_t value)
     dmcontrol.resumereq = (value & (0x1 << 30)) != 0;
     dmcontrol.haltreq = (value & (0x1 << 31)) != 0;
 
-
     // Extract hartsel (hart selection) and hasel (hart array select) fields
     dmcontrol.hartsel = (value >> 6) & 0x3ff;
     dmcontrol.hasel = (value & (0x1 << 26)) != 0;
 
     // Use lower 5 bits of hartsel to select thread within warp (0-31)
+    // Note: We always use thread 0 from emulator's warp 0
     unsigned thread_id = dmcontrol.hartsel & 0x1F;
     if (thread_id < 32) {
-        warp.set_current_thread(thread_id);
-        dm_log("[DM] Thread selection: hartsel=0x%x, selected thread=%u\n", dmcontrol.hartsel, thread_id);
+        dm_log("[DM] Thread selection: hartsel=0x%x, selected thread=%u (using thread 0)\n", dmcontrol.hartsel, thread_id);
     } else {
         dm_log("[DM] Invalid thread selection: hartsel=0x%x, thread_id=%u (max 31)\n", dmcontrol.hartsel, thread_id);
     }
@@ -420,21 +422,15 @@ bool DebugModule::write_dmcontrol(uint32_t value)
         dmcontrol.haltreq = false;
     }
 
-
-
-
     if (dmcontrol.resumereq && !resumereq_prev) {
-
-
-        warp.set_resumeack(false);
+        resumeack_ = false;
         resume_hart(false);
     }
 
     resumereq_prev = dmcontrol.resumereq;
 
-
     if (dmcontrol.ackhavereset) {
-        warp.set_havereset(false);
+        havereset_ = false;
     }
 
     update_dmstatus();
@@ -531,7 +527,12 @@ void DebugModule::execute_command(uint32_t value)
         }
 
         if (postexec) {
-            uint32_t pc = warp.get_pc();
+            // Get PC from emulator
+            uint32_t pc = 0;
+            if (emulator_ != nullptr) {
+                auto& warp0 = emulator_->get_warp(0);
+                pc = static_cast<uint32_t>(warp0.PC);
+            }
             
             // Check for software breakpoint: if instruction at PC is EBREAK, halt
             uint32_t instruction = read_mem(pc);
@@ -541,9 +542,9 @@ void DebugModule::execute_command(uint32_t value)
                 halt_hart(1);  // Cause 1 = ebreak instruction
                 return;  // Don't execute the instruction
             }
-            
-            warp.step();
-            dm_log("[DM] STEP: PC incremented by 4, new PC=0x%08x\n", warp.get_pc());
+
+            // Note: Step is handled by emulator, not here
+            dm_log("[DM] STEP: PC=0x%08x (step handled by emulator)\n", pc);
         }
     } else if (cmdtype == 0x02) {
         // Access Memory command (per updated RISC-V Debug Spec)
@@ -618,9 +619,18 @@ void DebugModule::execute_command(uint32_t value)
                 uint32_t old_val = read_mem(mem_addr);
                 write_mem(mem_addr, (old_val & ~0xFF) | (write_data & 0xFF));
             } else if (access_size == 2) {
+                // Detect compressed EBREAK (0x9002) being written - save original instruction
+                if ((write_data & 0xFFFF) == 0x9002 && !has_breakpoint(mem_addr)) {
+                    add_breakpoint(mem_addr);
+                }
                 uint32_t old_val = read_mem(mem_addr);
                 write_mem(mem_addr, (old_val & ~0xFFFF) | (write_data & 0xFFFF));
             } else if (access_size == 4) {
+                // Detect EBREAK instruction (32-bit: 0x00100073 or compressed: 0x00009002) being written
+                bool is_ebreak = (write_data == 0x00100073) || ((write_data & 0xFFFF) == 0x9002);
+                if (is_ebreak && !has_breakpoint(mem_addr)) {
+                    add_breakpoint(mem_addr);
+                }
                 write_mem(mem_addr, write_data);
             } else {
                 dm_log("[DM] Access Memory: unsupported write size %zu\n", access_size);
@@ -689,13 +699,12 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
             auto& warp0 = emulator_->get_warp(0);
             value = static_cast<uint32_t>(warp0.ireg_file.at(gpr_index).at(0));
         } else {
-            // Fallback to standalone warp
-            value = warp.get_reg(gpr_index);
+            // No emulator available
+            value = 0;
         }
         dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x\n", gpr_index, regaddr, value);
         return value;
     }
-
 
     if (regaddr == 0x1020) {
         uint32_t value;
@@ -704,28 +713,24 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
             auto& warp0 = emulator_->get_warp(0);
             value = static_cast<uint32_t>(warp0.PC);
         } else {
-            // Fallback to standalone warp
-            value = warp.get_pc();
+            // No emulator available
+            value = 0;
         }
         dm_log("[DM] READ REG  pc (0x1020) -> 0x%08x\n", value);
         return value;
     }
 
-
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        uint32_t value = warp.dcsr_to_u32();
+        uint32_t value = dcsr_.to_u32();
         dm_log("[DM] READ REG  dcsr (0x7B0) -> 0x%08x\n", value);
         return value;
     }
 
-
     if (regaddr == 0x07b1 || regaddr == 0x7B1) {
-        uint32_t value = warp.get_dpc();
+        uint32_t value = dpc_;
         dm_log("[DM] READ REG  dpc (0x7B1) -> 0x%08x\n", value);
         return value;
     }
-
-
 
     if (regaddr >= 0x0000 && regaddr <= 0x0FFF) {
         uint16_t csr_num = regaddr;
@@ -745,10 +750,8 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         return 0;
     }
 
-
     if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
         uint16_t csr_num = regaddr - 0xC000;
-
 
         if (csr_num == 0x0301) {
             uint32_t value = 0x80001100;
@@ -766,46 +769,47 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         return 0;
     }
 
-
     dm_log("[DM] READ REG unknown regaddr=0x%04x -> 0x00000000\n", regaddr);
     return 0;
 }
 
 void DebugModule::write_register(uint16_t regaddr, uint32_t val)
 {
-
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
         if (gpr_index == 0) {
             dm_log("[DM] WRITE REG x0 (0x%04x) <- 0x%08x (ignored, x0 is read-only)\n", regaddr, val);
             return;
         }
-        warp.set_reg(gpr_index, val);
+        if (emulator_ != nullptr) {
+            auto& warp0 = emulator_->get_warp(0);
+            warp0.ireg_file.at(gpr_index).at(0) = val;
+        }
         dm_log("[DM] WRITE REG x%d (0x%04x) <- 0x%08x\n", gpr_index, regaddr, val);
         return;
     }
 
 
     if (regaddr == 0x1020) {
-        warp.set_pc(val);
+        if (emulator_ != nullptr) {
+            auto& warp0 = emulator_->get_warp(0);
+            warp0.PC = val;
+        }
         dm_log("[DM] WRITE REG pc (0x1020) <- 0x%08x\n", val);
         return;
     }
 
-
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        warp.update_dcsr(val);
+        dcsr_.from_u32(val);
         dm_log("[DM] WRITE REG dcsr (0x7B0) <- 0x%08x\n", val);
         return;
     }
 
-
     if (regaddr == 0x07b1 || regaddr == 0x7B1) {
-        warp.set_dpc(val);
+        dpc_ = val;
         dm_log("[DM] WRITE REG dpc (0x7B1) <- 0x%08x\n", val);
         return;
     }
-
 
     if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
         dm_log("[DM] WRITE REG csr[0x%04x] (0x%04x) <- 0x%08x (ignored)\n", regaddr - 0xC000, regaddr, val);
@@ -817,23 +821,41 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
 
 uint32_t DebugModule::read_mem(uint64_t addr)
 {
-    if (addr + 4 > memory.size()) {
-        dm_log("[DM] READ MEM  addr=0x%llx -> OUT OF BOUNDS\n", (unsigned long long)addr);
+    if (addr > UINT32_MAX) {
+        dm_log("[DM] READ MEM  addr=0x%llx -> ADDRESS TOO LARGE\n", (unsigned long long)addr);
         return 0;
     }
-    uint32_t val = *(uint32_t*)&memory[addr];
+    uint32_t val = read_program_memory(static_cast<uint32_t>(addr));
     dm_log("[DM] READ MEM  addr=0x%llx -> 0x%x\n", (unsigned long long)addr, val);
     return val;
 }
 
 void DebugModule::write_mem(uint64_t addr, uint32_t val)
 {
-    if (addr + 4 > memory.size()) {
-        dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x OUT OF BOUNDS\n", (unsigned long long)addr, val);
+    if (addr > UINT32_MAX) {
+        dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x ADDRESS TOO LARGE\n", (unsigned long long)addr, val);
         return;
     }
-    *(uint32_t*)&memory[addr] = val;
+    write_program_memory(static_cast<uint32_t>(addr), val);
     dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x\n", (unsigned long long)addr, val);
+}
+
+uint32_t DebugModule::read_program_memory(uint32_t addr) const
+{
+    if (!emulator_) {
+        return 0;
+    }
+    uint32_t value = 0;
+    emulator_->dcache_read(&value, addr, sizeof(uint32_t));
+    return value;
+}
+
+void DebugModule::write_program_memory(uint32_t addr, uint32_t value)
+{
+    if (!emulator_) {
+        return;
+    }
+    emulator_->dcache_write(&value, addr, sizeof(uint32_t));
 }
 
 uint32_t DebugModule::direct_read_register(uint16_t regaddr)
@@ -871,10 +893,14 @@ bool DebugModule::write_memory_block(uint64_t addr, const uint8_t* src, size_t l
 void DebugModule::halt_hart(uint8_t cause)
 {
     dm_log("[DM] Halt requested - hart halted (cause=%u)\n", cause);
-    warp.enter_debug_mode(cause, warp.get_pc());
+    // Enter debug mode: update DCSR (DPC will be updated by emulator when it actually halts)
+    dcsr_.cause = cause & 0xF;
+    is_halted_ = true;
+    // Set halt flag so emulator will stop execution and update DPC
+    set_halt_requested(true);
     update_dmstatus();
     // Log DCSR value after setting cause to verify encoding
-    uint32_t dcsr_val = warp.dcsr_to_u32();
+    uint32_t dcsr_val = dcsr_.to_u32();
     uint8_t cause_field = (dcsr_val >> 8) & 0xF;
     dm_log("[DM] DCSR after halt: 0x%08x, cause field: 0x%x (should be 0x%x)\n", dcsr_val, cause_field, cause);
 }
@@ -885,27 +911,96 @@ void DebugModule::halt_hart(uint8_t cause)
 void DebugModule::resume_hart(bool single_step)
 {
     dm_log("[DM] Resume requested (single_step=%d)\n", single_step ? 1 : 0);
-    warp.set_halted(false);
+    is_halted_ = false;
 
-    bool do_step = single_step || warp.is_step_mode();
+    // Log current program state before resuming
+    if (emulator_ != nullptr) {
+        auto& warp0 = emulator_->get_warp(0);
+        uint32_t current_pc = static_cast<uint32_t>(warp0.PC);
+        uint32_t dpc = dpc_;
+        dm_log("[DM] Resume state: PC=0x%08x, DPC=0x%08x, halt_requested=%d\n", 
+               current_pc, dpc, halt_requested_ ? 1 : 0);
+    }
+
+    bool do_step = single_step || dcsr_.step;
     if (do_step) {
-        warp.step();
-        dm_log("[WARP] Single-step executed, PC=0x%08x\n", warp.get_pc());
-        warp.enter_debug_mode(4, warp.get_pc());
-
-
-
-        warp.set_resumeack(true);
+        // Set single-step flag so emulator will execute one instruction then halt
+        set_single_step_active(true);
+        set_halt_requested(false);  // Clear halt to allow execution
+        // No need to resume - just clearing halt_requested_ is enough
+        dm_log("[DM] Single-step mode: halt_requested cleared, will execute one instruction\n");
+        resumeack_ = true;
     } else {
-        dm_log("[HART] Continuous execution resumed\n");
-        warp.set_resumeack(true);
+        // Clear halt flag to allow continuous execution
+        set_halt_requested(false);
+        set_single_step_active(false);
+        // No need to resume - just clearing halt_requested_ is enough
+        dm_log("[DM] Continuous execution resumed: halt_requested=%d, single_step_active=%d\n", 
+               halt_requested_ ? 1 : 0, single_step_active_ ? 1 : 0);
+        resumeack_ = true;
     }
     update_dmstatus();
 }
 
 bool DebugModule::hart_is_halted() const
 {
-    return warp.is_halted();
+    return is_halted_ || halt_requested_;
+}
+
+bool DebugModule::is_halt_requested() const
+{
+    return halt_requested_;
+}
+
+bool DebugModule::is_single_step_active() const
+{
+    return single_step_active_;
+}
+
+bool DebugModule::is_debug_mode_enabled() const
+{
+    return debug_mode_enabled_;
+}
+
+void DebugModule::set_halt_requested(bool halt)
+{
+    halt_requested_ = halt;
+}
+
+void DebugModule::set_single_step_active(bool step)
+{
+    single_step_active_ = step;
+}
+
+void DebugModule::set_debug_mode_enabled(bool enabled)
+{
+    debug_mode_enabled_ = enabled;
+}
+
+bool DebugModule::has_breakpoint(uint32_t addr) const
+{
+    return software_breakpoints_.find(addr) != software_breakpoints_.end();
+}
+
+void DebugModule::add_breakpoint(uint32_t addr)
+{
+    if (has_breakpoint(addr)) {
+        return; // Already has breakpoint
+    }
+    // Read and store the original instruction (should be called before EBREAK is written)
+    uint32_t original = read_program_memory(addr);
+    software_breakpoints_[addr] = original;
+}
+
+void DebugModule::remove_breakpoint(uint32_t addr)
+{
+    auto it = software_breakpoints_.find(addr);
+    if (it == software_breakpoints_.end()) {
+        return; // No breakpoint at this address
+    }
+    // Restore the original instruction
+    write_program_memory(addr, it->second);
+    software_breakpoints_.erase(it);
 }
 
 // Called periodically when JTAG is in Run-Test-Idle state.
@@ -914,28 +1009,24 @@ bool DebugModule::hart_is_halted() const
 // and checking for breakpoints.
 void DebugModule::run_test_idle()
 {
-    // If hart is running continuously, execute instructions until we hit a breakpoint
-    if (!warp.is_halted()) {
-        // Execute one instruction: read instruction at PC, check for breakpoint, advance PC
-        uint32_t pc = warp.get_pc();
-        uint32_t instruction = read_mem(pc);
-        
-        dm_log("[DM] run_test_idle: hart running, PC=0x%08x, instruction=0x%08x\n", pc, instruction);
-        
-        // Check for both 32-bit EBREAK (0x00100073) and compressed EBREAK (0x9002)
-        // Compressed EBREAK appears as 0x00009002 when read as 32-bit (little-endian)
-        if (instruction == 0x00100073 || (instruction & 0xFFFF) == 0x9002) {
-            // EBREAK instruction - software breakpoint hit
-            dm_log("[DM] Software breakpoint hit at 0x%08x during execution (EBREAK), halting hart\n", pc);
-            halt_hart(1);  // Cause 1 = ebreak instruction
-        } else {
-            // Execute the instruction (for now, just advance PC by 4)
-            // In a real implementation, this would decode and execute the instruction
-            warp.step();
-            dm_log("[DM] Executed instruction at 0x%08x, PC now 0x%08x\n", pc, warp.get_pc());
+    // run_test_idle is called periodically during JTAG Run-Test-Idle state
+    // The emulator handles actual instruction execution via step()
+    // We just need to check if we're halted or running
+    // Note: We don't execute instructions here - that's handled by the emulator
+    
+    // Only log occasionally to avoid spam (every 1000 calls)
+    static uint64_t log_counter = 0;
+    if (!is_halted_ && !halt_requested_) {
+        if ((log_counter++ % 1000) == 0 && emulator_ != nullptr) {
+            auto& warp0 = emulator_->get_warp(0);
+            uint32_t pc = static_cast<uint32_t>(warp0.PC);
+            dm_log("[DM] run_test_idle: hart running, PC=0x%08x\n", pc);
         }
     } else {
-        dm_log("[DM] run_test_idle: hart is halted, nothing to do\n");
+        // Only log occasionally when halted too
+        if ((log_counter++ % 1000) == 0) {
+            dm_log("[DM] run_test_idle: hart is halted, nothing to do\n");
+        }
     }
 }
 

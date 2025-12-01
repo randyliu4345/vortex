@@ -154,6 +154,30 @@ int main(int argc, char **argv) {
       // Create debug module with emulator reference
       DebugModule dm(emulator);
       
+      // Set debug module in emulator so it can check flags
+      if (emulator != nullptr) {
+        emulator->set_debug_module(&dm);
+      }
+      
+      // Halt the program at startup so debugger can control execution
+      // This ensures the program doesn't run until the debugger explicitly resumes it
+      dm.set_debug_mode_enabled(true);
+      if (emulator != nullptr) {
+        // Update DPC with initial PC value before halting
+        auto& warp0 = emulator->get_warp(0);
+        uint32_t initial_pc = static_cast<uint32_t>(warp0.PC);
+        dm.direct_write_register(0x7B1, initial_pc);  // Set DPC to initial PC
+        // Note: We don't need to suspend the warp here because halt_requested_
+        // check at the start of step() will prevent execution
+      }
+      // Halt the hart (cause 0 = reserved, but we use it for initial halt)
+      // This sets halt_requested and is_halted flags, and updates DCSR
+      dm.halt_hart(0);  // Cause 0 for initial halt state
+      
+      // Initialize and reset simulation platform
+      SimPlatform::instance().initialize();
+      SimPlatform::instance().reset();
+      
       // Create JTAG DTM
       jtag_dtm_t dtm(&dm);
       
@@ -162,8 +186,11 @@ int main(int argc, char **argv) {
       
       std::cout << "[DEBUG] Remote bitbang server ready. Waiting for OpenOCD connection..." << std::endl;
       
-      // Infinite loop: tick the RBB server
+      // Debug loop: advance simulation and handle JTAG communication
       while (true) {
+        // Advance simulation by one cycle
+        SimPlatform::instance().tick();
+        // Handle JTAG/debugger communication
         rbb.tick();
       }
     } else {
