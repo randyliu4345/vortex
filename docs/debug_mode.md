@@ -1,0 +1,149 @@
+# Vortex Debug Mode with GDB
+
+This guide explains how to debug Vortex programs using GDB and OpenOCD with the RISC-V debug interface.
+
+## Prerequisites
+
+- Built simulator: `make -C build/sim/simx`
+- OpenOCD installed
+- RISC-V GDB (part of RISC-V toolchain)
+
+## Quick Start: Debugging Fibonacci
+
+### Step 1: Start Simulator in Debug Mode
+
+```bash
+cd /vortex
+./build/sim/simx/simx -d -p 9824 build/tests/kernel/fibonacci/fibonacci.bin
+```
+
+The simulator starts halted, waiting for a debugger connection.
+
+### Step 2: Start OpenOCD
+
+```bash
+openocd -f vortex.cfg
+```
+
+**Note:** `vortex.cfg` uses port 9824. If using default port 9823, either:
+- Start simulator with `-p 9824`, or
+- Update `vortex.cfg` to use port 9823
+
+### Step 3: Connect GDB
+
+```bash
+riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
+```
+
+In GDB:
+```
+(gdb) target remote localhost:3333
+(gdb) monitor reset halt
+(gdb) set $pc = 0x80000000
+(gdb) break main
+(gdb) continue
+```
+
+## Common GDB Commands
+
+```bash
+# Breakpoints
+(gdb) break main
+(gdb) break fibonacci
+(gdb) break main.cpp:16
+
+# Execution control
+(gdb) continue          # Continue execution
+(gdb) step             # Step into function
+(gdb) next             # Step over function
+(gdb) stepi            # Step one instruction
+(gdb) nexti            # Next instruction
+
+# Inspection
+(gdb) print variable
+(gdb) info registers
+(gdb) x/10i $pc        # Disassemble 10 instructions
+(gdb) x/s 0x80005740   # Print string at address
+```
+
+## Command-Line Options
+
+```bash
+./build/sim/simx/simx [options] <program.bin>
+
+Options:
+  -d              Enable debug mode
+  -p <port>       Remote bitbang port (default: 9823)
+  -c <cores>      Number of cores
+  -w <warps>      Number of warps per core
+  -t <threads>    Number of threads per warp
+```
+
+## Key Addresses (Fibonacci Binary)
+
+| Address | Function/Data |
+|---------|---------------|
+| 0x80000000 | `_start` (entry point) |
+| 0x80000094 | `fibonacci()` |
+| 0x80000114 | `main()` |
+| 0x800001ac | `init_regs()` (final PC) |
+| 0x80005740 | `"fibonacci(%d) = %d\n"` |
+| 0x80005754 | `"Passed!\n"` |
+| 0x8000575c | `"Failed! value=%d, expected=%d\n"` |
+
+## Troubleshooting
+
+**OpenOCD can't connect:**
+- Verify simulator is running with `-d` flag
+- Check port numbers match (default 9823, config uses 9824)
+- Check simulator output for "Remote bitbang server ready"
+
+**GDB shows PC at 0x800001ac:**
+- Program already completed
+- Use `monitor reset halt` and `set $pc = 0x80000000` to restart
+
+**Breakpoints not working:**
+- Ensure address is in executable memory (0x80000000+)
+- Verify program hasn't already passed that address
+
+## Example Session
+
+```bash
+# Terminal 1
+./build/sim/simx/simx -d -p 9824 build/tests/kernel/fibonacci/fibonacci.bin
+
+# Terminal 2
+openocd -f vortex.cfg
+
+# Terminal 3
+riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
+(gdb) target remote localhost:3333
+(gdb) monitor reset halt
+(gdb) set $pc = 0x80000000
+(gdb) break main
+(gdb) break fibonacci
+(gdb) continue
+Breakpoint 1, main () at tests/kernel/fibonacci/main.cpp:13
+(gdb) next
+16      int fib = fibonacci(Num);
+(gdb) step
+Breakpoint 2, fibonacci (n=9) at tests/kernel/fibonacci/main.cpp:7
+(gdb) print n
+$1 = 9
+(gdb) continue
+Continuing.
+[Inferior 1 (Remote target) exited normally]
+```
+
+## Features
+
+- **Software breakpoints:** Implemented using `EBREAK` instructions
+- **Single-step:** Full instruction-level stepping support
+- **Program completion:** Automatically detected and reported to GDB
+- **RISC-V Debug Spec 0.13:** Full compliance with standard debug interface
+
+## Additional Resources
+
+- [RISC-V Debug Specification](https://github.com/riscv/riscv-debug-spec)
+- [OpenOCD Documentation](http://openocd.org/doc/html/index.html)
+- [GDB User Manual](https://sourceware.org/gdb/current/onlinedocs/gdb/)
