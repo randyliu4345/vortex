@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstring>
 #include "emulator.h"
+#include <VX_config.h>
+#include <bitmanip.h>
 
 namespace {
 
@@ -144,8 +146,8 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
             // Log DMSTATUS reads to help debug thread discovery
             unsigned current_thread = dmcontrol.hartsel & 0x1F;
             bool exists = (current_thread < 32);
-            dm_log("[DM] DMSTATUS read: hartsel=0x%x (thread=%u), anynonexistent=%d, value=0x%08x\n", 
-                   dmcontrol.hartsel, current_thread, dmstatus.anynonexistent ? 1 : 0, *value);
+            // dm_log("[DM] DMSTATUS read: hartsel=0x%x (thread=%u), anynonexistent=%d, value=0x%08x\n", 
+            //       dmcontrol.hartsel, current_thread, dmstatus.anynonexistent ? 1 : 0, *value);
 
 
             if (exists) {
@@ -177,6 +179,7 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
             break;
         case 0x5:  // DATA1
             *value = data1;
+            dm_log("[DM] DATA1 read: 0x%08x\n", data1);
             break;
         case 0x6:  // DATA2
             *value = data2;
@@ -198,7 +201,7 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
             return false;
     }
 
-    dm_log("[DM] DMI READ  addr=0x%x -> 0x%x\n", address, *value);
+    // dm_log("[DM] DMI READ  addr=0x%x -> 0x%x\n", address, *value);
     return true;
 }
 
@@ -736,8 +739,10 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         uint16_t csr_num = regaddr;
 
         if (csr_num == 0x0301) {
-            uint32_t value = 0x80001100;
-            dm_log("[DM] READ REG  misa (0x0301) -> 0x%08x (RV64IM)\n", value);
+            // Calculate MISA based on configured extensions
+            uint32_t value = ((vortex::log2floor(XLEN) - 4) << 30) | MISA_STD;
+            dm_log("[DM] READ REG  misa (0x0301) -> 0x%08x (RV%dIMAFD%s)\n", 
+                   value, XLEN, (EXT_A_ENABLED ? "A" : ""));
             return value;
         }
 
@@ -754,8 +759,10 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         uint16_t csr_num = regaddr - 0xC000;
 
         if (csr_num == 0x0301) {
-            uint32_t value = 0x80001100;
-            dm_log("[DM] READ REG  misa (0x%04x) -> 0x%08x (RV64IM)\n", regaddr, value);
+            // Calculate MISA based on configured extensions
+            uint32_t value = ((vortex::log2floor(XLEN) - 4) << 30) | MISA_STD;
+            dm_log("[DM] READ REG  misa (0x%04x) -> 0x%08x (RV%dIMAFD%s)\n", 
+                   regaddr, value, XLEN, (EXT_A_ENABLED ? "A" : ""));
             return value;
         }
 
