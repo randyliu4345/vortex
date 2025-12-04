@@ -116,23 +116,15 @@ Options:
 openocd -f vortex.cfg
 
 # Terminal 3
-riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
+riscv64-unknown-elf-gdb
 (gdb) target remote localhost:3333
-(gdb) monitor reset halt
-(gdb) set $pc = 0x80000000
-(gdb) break main
-(gdb) break fibonacci
+(gdb) stepi
+(gdb) b *0x80000094
 (gdb) continue
-Breakpoint 1, main () at tests/kernel/fibonacci/main.cpp:13
-(gdb) next
-16      int fib = fibonacci(Num);
-(gdb) step
-Breakpoint 2, fibonacci (n=9) at tests/kernel/fibonacci/main.cpp:7
-(gdb) print n
-$1 = 9
+(gdb) i r
 (gdb) continue
 Continuing.
-[Inferior 1 (Remote target) exited normally]
+Program Stopped
 ```
 
 ## Features
