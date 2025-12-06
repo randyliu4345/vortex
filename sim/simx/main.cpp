@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
       }
       // Halt the hart (cause 0 = reserved, but we use it for initial halt)
       // This sets halt_requested and is_halted flags, and updates DCSR
-      dm.halt_hart(0);  // Cause 0 for initial halt state
+      dm.halt_hart(3);  // Cause 3 = haltreq (debugger request)
       
       // Initialize and reset simulation platform
       SimPlatform::instance().initialize();
