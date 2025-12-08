@@ -534,6 +534,13 @@ void DebugModule::execute_command(uint32_t value)
                 write_register(regaddr, data0());
             } else {
                 data0() = read_register(regaddr);
+                if (aarsize == 3) {
+                    // 64-bit read - upper 32 bits should be 0 for 32-bit registers
+                    data1 = 0;
+                } else {
+                    // 32-bit read - clear DATA1 to prevent corruption
+                    data1 = 0;
+                }
             }
         }
 
@@ -653,15 +660,23 @@ void DebugModule::execute_command(uint32_t value)
                 dm_log("[DM] Access Memory: unsupported write size %zu\n", access_size);
             }
         } else {
-            // Read memory: result goes into DATA0
-            uint32_t read_val = read_mem(mem_addr);
-
             if (access_size == 1) {
+                uint32_t read_val = read_mem(mem_addr);
                 data0() = read_val & 0xFF;
             } else if (access_size == 2) {
+                uint32_t read_val = read_mem(mem_addr);
                 data0() = read_val & 0xFFFF;
             } else if (access_size == 4) {
+                uint32_t read_val = read_mem(mem_addr);
                 data0() = read_val;
+            } else if (access_size == 8) {
+                // 64-bit read: lower 32 bits in DATA0, upper 32 bits in DATA1
+                uint32_t read_val_low = read_mem(mem_addr);
+                uint32_t read_val_high = read_mem(mem_addr + 4);
+                data0() = read_val_low;
+                data1 = read_val_high;
+                dm_log("[DM] Access Memory READ 64-bit: addr=0x%08x, low=0x%08x, high=0x%08x\n",
+                       mem_addr, read_val_low, read_val_high);
             } else {
                 dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
                 data0() = 0;
@@ -707,9 +722,7 @@ void DebugModule::execute_command(uint32_t value)
 // Register address mapping: 0x1000-0x101F (GPRs), 0x1020 (PC), 0x7B0 (DCSR), 0x7B1 (DPC), 0x0000-0x0FFF/0xC000-0xFFFF (CSRs).
 uint32_t DebugModule::read_register(uint16_t regaddr)
 {
-    // Get selected thread ID from hartsel (clamp to 0 to NUM_THREADS-1)
     unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
-    // Don't log every register read - too verbose
     
     // General purpose registers (x0–x31) at addresses 0x1000–0x101F
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
@@ -966,10 +979,12 @@ void DebugModule::resume_hart(bool single_step)
         dm_log("[DM] Resume state: PC=0x%08x, DPC=0x%08x, halt_requested=%d\n", 
                current_pc, dpc, halt_requested_ ? 1 : 0);
         
-        // CRITICAL: If we halted on a breakpoint (cause=1), remove it from tracking
-        // This prevents re-hitting the breakpoint if PC hasn't advanced yet
         if (dcsr_[0].cause == 1) {
-            uint32_t bp_addr = current_pc;
+            uint32_t bp_addr = dpc_;
+            if (bp_addr == 0) {
+                bp_addr = current_pc;
+            }
+            
             if (has_breakpoint(bp_addr)) {
                 dm_log("[DM] Removing breakpoint at 0x%08x before resuming from EBREAK\n", bp_addr);
                 remove_breakpoint(bp_addr);
@@ -977,11 +992,6 @@ void DebugModule::resume_hart(bool single_step)
         }
     }
 
-    // Clear DCSR cause field for all threads when resuming
-    // This prevents spurious SIGTRAP signals after deleting breakpoints
-    for (unsigned i = 0; i < NUM_THREADS; i++) {
-        dcsr_[i].cause = 0;
-    }
 
     bool do_step = single_step || dcsr_[0].step;  // Use hart 0's step flag (shared in SIMT)
     if (do_step) {
@@ -1074,11 +1084,10 @@ void DebugModule::notify_program_completed(uint32_t final_pc)
         // Update DPC to final PC
         direct_write_register(0x7B1, final_pc);
         
-        // Mark as halted (cause 0 = reserved, but we use it for natural completion)
         is_halted_ = true;
         set_halt_requested(true);
         for (unsigned i = 0; i < NUM_THREADS; i++) {
-            dcsr_[i].cause = 0;  // Natural completion
+            dcsr_[i].cause = 1;  // Use ebreak cause (generic halt)
         }
     }
 }
