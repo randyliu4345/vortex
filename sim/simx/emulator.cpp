@@ -166,11 +166,14 @@ instr_trace_t* Emulator::step() {
   // process pending wspawn
   if (wspawn_.valid && active_warps_.count() == 1) {
     DP(3, "*** Activate " << (wspawn_.num_warps-1) << " warps at PC: " << std::hex << wspawn_.nextPC << std::dec);
+    std::cout << "[SPAWN] Activating " << (wspawn_.num_warps-1) << " additional warps at PC=0x" 
+              << std::hex << wspawn_.nextPC << std::dec << std::endl;
     for (uint32_t i = 1; i < wspawn_.num_warps; ++i) {
       auto& warp = warps_.at(i);
       warp.PC = wspawn_.nextPC;
       warp.tmask.set(0);
       active_warps_.set(i);
+      std::cout << "[SPAWN]   Warp " << i << " activated with thread 0" << std::endl;
     }
     wspawn_.valid = false;
     stalled_warps_.reset(0);

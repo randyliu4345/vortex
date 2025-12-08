@@ -1538,6 +1538,16 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
 
   if (warp.tmask != next_tmask) {
     DP(3, "*** New Tmask=" << next_tmask);
+    std::cout << "[THREAD] Warp " << wid << " thread mask changed: " << warp.tmask 
+              << " -> " << next_tmask << std::endl;
+    // Log which threads are now active
+    for (uint32_t t = 0; t < num_threads; ++t) {
+      if (next_tmask.test(t) && !warp.tmask.test(t)) {
+        std::cout << "[THREAD]   Thread " << t << " activated in warp " << wid << std::endl;
+      } else if (!next_tmask.test(t) && warp.tmask.test(t)) {
+        std::cout << "[THREAD]   Thread " << t << " deactivated in warp " << wid << std::endl;
+      }
+    }
     warp.tmask = next_tmask;
     if (!next_tmask.any()) {
       last_inactive_warp_id_ = wid;

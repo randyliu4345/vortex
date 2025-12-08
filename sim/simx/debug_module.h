@@ -226,7 +226,10 @@ private:
             xdebugver = 4;
             reserved  = 0;
         }
-    } dcsr_;
+    };
+    
+    // Per-hart DCSR registers (one for each thread)
+    std::array<DCSR, 32> dcsr_;  // Support up to 32 threads
     
     // Debug Program Counter (DPC) - PC value when entering debug mode
     uint32_t dpc_;

@@ -62,8 +62,10 @@ void DebugModule::reset()
     dmstatus = dmstatus_t();
     abstractcs = abstractcs_t();
 
-    // Initialize debug state
-    dcsr_ = DCSR();
+    // Initialize debug state for all threads
+    for (unsigned i = 0; i < 32; i++) {
+        dcsr_[i] = DCSR();
+    }
     dpc_ = 0;
     resumeack_ = false;
     havereset_ = false;
@@ -115,10 +117,9 @@ void DebugModule::update_dmstatus()
     dmstatus.allhavereset = havereset_;
     dmstatus.anyhavereset = havereset_;
 
-    // Check if selected hartsel (thread) is valid (0-31)
-    // In our implementation, we have 32 threads, so hartsel must be 0-31
-    unsigned thread_id = dmcontrol.hartsel & 0x1F;
-    bool hart_exists = (thread_id < 32);  // We support threads 0-31
+    // Check if selected hartsel (thread) is valid (0 to NUM_THREADS-1)
+    // In our implementation, we have NUM_THREADS threads per warp
+    bool hart_exists = (dmcontrol.hartsel < NUM_THREADS);  // We support harts 0 to NUM_THREADS-1
     
     dmstatus.allnonexistent = !hart_exists;
     dmstatus.anynonexistent = !hart_exists;
@@ -144,19 +145,12 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
             update_dmstatus();
             *value = read_dmstatus();
             // Log DMSTATUS reads to help debug thread discovery
-            unsigned current_thread = dmcontrol.hartsel & 0x1F;
-            bool exists = (current_thread < 32);
-            // dm_log("[DM] DMSTATUS read: hartsel=0x%x (thread=%u), anynonexistent=%d, value=0x%08x\n", 
-            //       dmcontrol.hartsel, current_thread, dmstatus.anynonexistent ? 1 : 0, *value);
-
-
-            if (exists) {
-                *value &= ~((1U << 14) | (1U << 15));  // Clear anynonexistent and allnonexistent bits
-            }
+            // dm_log("[DM] DMSTATUS read: hartsel=0x%x, anynonexistent=%d, value=0x%08x\n", 
+            //       dmcontrol.hartsel, dmstatus.anynonexistent ? 1 : 0, *value);
 
             // Ensure authenticated bit (bit 7) is always set - critical for OpenOCD compatibility
             if ((*value & (1U << 7)) == 0) {
-        dm_log("[DM] ERROR: authenticated bit (bit 7) not set! value=0x%x\n", *value);
+                dm_log("[DM] ERROR: authenticated bit (bit 7) not set! value=0x%x\n", *value);
                 *value |= (1U << 7);
             }
             break;
@@ -260,16 +254,21 @@ uint32_t DebugModule::read_dmcontrol()
     result = set_field_pos<uint32_t>(result, 0x1U, 1, dmcontrol.ndmreset ? 1U : 0U);
     result = set_field_pos<uint32_t>(result, 0x1U, 2, dmcontrol.clrresethaltreq ? 1U : 0U);
     result = set_field_pos<uint32_t>(result, 0x1U, 3, dmcontrol.setresethaltreq ? 1U : 0U);
-    result = set_field_pos<uint32_t>(result, 0x1U, 16, dmcontrol.hartreset ? 1U : 0U);
+    result = set_field_pos<uint32_t>(result, 0x1U, 29, dmcontrol.hartreset ? 1U : 0U);
     result = set_field_pos<uint32_t>(result, 0x1U, 28, dmcontrol.ackhavereset ? 1U : 0U);
     result = set_field_pos<uint32_t>(result, 0x1U, 30, dmcontrol.resumereq ? 1U : 0U);
     result = set_field_pos<uint32_t>(result, 0x1U, 31, dmcontrol.haltreq ? 1U : 0U);
 
 
-    result = set_field_pos<uint32_t>(result, 0x3ffU << 6, 6, dmcontrol.hartsel);
+    // Encode hartsel as split fields per Debug Spec 0.13+
+    // For typical systems (harts 0-1023), use hartselhi directly
+    unsigned hartsello = 0;  // Leave hartsello as 0 for simple encoding
+    unsigned hartselhi = dmcontrol.hartsel;  // Put hart ID in hartselhi
+    result = set_field_pos<uint32_t>(result, 0x3ffU << 6, 6, hartsello);    // Bits [15:6]
+    result = set_field_pos<uint32_t>(result, 0x3ffU << 16, 16, hartselhi);  // Bits [25:16]
     result = set_field_pos<uint32_t>(result, 0x1U, 26, dmcontrol.hasel ? 1U : 0U);
 
-
+    
     result |= 1;
 
     return result;
@@ -398,23 +397,32 @@ bool DebugModule::write_dmcontrol(uint32_t value)
     dmcontrol.ndmreset = (value & (0x1 << 1)) != 0;
     dmcontrol.clrresethaltreq = (value & (0x1 << 2)) != 0;
     dmcontrol.setresethaltreq = (value & (0x1 << 3)) != 0;
-    dmcontrol.hartreset = (value & (0x1 << 16)) != 0;
+    dmcontrol.hartreset = (value & (0x1 << 29)) != 0;  // Bit 29 in Debug Spec 0.13
     dmcontrol.ackhavereset = (value & (0x1 << 28)) != 0;
     dmcontrol.resumereq = (value & (0x1 << 30)) != 0;
     dmcontrol.haltreq = (value & (0x1 << 31)) != 0;
 
-    // Extract hartsel (hart selection) and hasel (hart array select) fields
-    dmcontrol.hartsel = (value >> 6) & 0x3ff;
+    // Extract hartsel (hart selection) field per RISC-V Debug Spec 0.13+
+    // hartsel is split into two fields:
+    // - hartsello in bits [15:6]  
+    // - hartselhi in bits [25:16]
+    // For values 0-1023, OpenOCD typically just uses hartselhi (bits 25:16)
+    unsigned hartsello = (value >> 6) & 0x3ff;   // Bits [15:6]
+    unsigned hartselhi = (value >> 16) & 0x3ff;  // Bits [25:16]
+    
+    // For typical single-hart systems, hartselhi contains the hart ID directly
+    // For >1023 harts, you'd combine: (hartselhi << 10) | hartsello
+    dmcontrol.hartsel = hartselhi;  // Use hartselhi directly for harts 0-1023
     dmcontrol.hasel = (value & (0x1 << 26)) != 0;
 
-    // Use lower 5 bits of hartsel to select thread within warp (0-31)
-    // Note: We always use thread 0 from emulator's warp 0
-    unsigned thread_id = dmcontrol.hartsel & 0x1F;
-    if (thread_id < 32) {
-        dm_log("[DM] Thread selection: hartsel=0x%x, selected thread=%u (using thread 0)\n", dmcontrol.hartsel, thread_id);
-    } else {
-        dm_log("[DM] Invalid thread selection: hartsel=0x%x, thread_id=%u (max 31)\n", dmcontrol.hartsel, thread_id);
+    // Map hartsel to thread ID (clamp to 0 to NUM_THREADS-1 for our warp)
+    unsigned thread_id = dmcontrol.hartsel;
+    if (thread_id >= NUM_THREADS) {
+        // Only log when out of range (unusual)
+        dm_log("[DM] Thread selection: hartsel=0x%x out of range, clamping to thread 0\n", dmcontrol.hartsel);
+        thread_id = 0;
     }
+    // Normal thread selection - don't log (too verbose with multi-target)
 
     // Always keep dmactive set for stub (always active)
     dmcontrol.dmactive = true;
@@ -526,6 +534,13 @@ void DebugModule::execute_command(uint32_t value)
                 write_register(regaddr, data0());
             } else {
                 data0() = read_register(regaddr);
+                if (aarsize == 3) {
+                    // 64-bit read - upper 32 bits should be 0 for 32-bit registers
+                    data1 = 0;
+                } else {
+                    // 32-bit read - clear DATA1 to prevent corruption
+                    data1 = 0;
+                }
             }
         }
 
@@ -625,6 +640,9 @@ void DebugModule::execute_command(uint32_t value)
                 // Detect compressed EBREAK (0x9002) being written - save original instruction
                 if ((write_data & 0xFFFF) == 0x9002 && !has_breakpoint(mem_addr)) {
                     add_breakpoint(mem_addr);
+                } else if ((write_data & 0xFFFF) != 0x9002 && has_breakpoint(mem_addr)) {
+                    // Non-EBREAK written to breakpoint address - breakpoint is being removed
+                    remove_breakpoint(mem_addr);
                 }
                     uint32_t old_val = read_mem(mem_addr);
                     write_mem(mem_addr, (old_val & ~0xFFFF) | (write_data & 0xFFFF));
@@ -633,25 +651,35 @@ void DebugModule::execute_command(uint32_t value)
                 bool is_ebreak = (write_data == 0x00100073) || ((write_data & 0xFFFF) == 0x9002);
                 if (is_ebreak && !has_breakpoint(mem_addr)) {
                     add_breakpoint(mem_addr);
+                } else if (!is_ebreak && has_breakpoint(mem_addr)) {
+                    // Non-EBREAK written to breakpoint address - breakpoint is being removed
+                    remove_breakpoint(mem_addr);
                 }
                     write_mem(mem_addr, write_data);
                 } else {
                     dm_log("[DM] Access Memory: unsupported write size %zu\n", access_size);
                 }
         } else {
-                // Read memory: result goes into DATA0
+            if (access_size == 1) {
                 uint32_t read_val = read_mem(mem_addr);
-                
-                if (access_size == 1) {
-                    data0() = read_val & 0xFF;
-                } else if (access_size == 2) {
-                    data0() = read_val & 0xFFFF;
-                } else if (access_size == 4) {
-                    data0() = read_val;
-                } else {
-                    dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
-                    data0() = 0;
-                }
+                data0() = read_val & 0xFF;
+            } else if (access_size == 2) {
+                uint32_t read_val = read_mem(mem_addr);
+                data0() = read_val & 0xFFFF;
+            } else if (access_size == 4) {
+                uint32_t read_val = read_mem(mem_addr);
+                data0() = read_val;
+            } else if (access_size == 8) {
+                // 64-bit read: lower 32 bits in DATA0, upper 32 bits in DATA1
+                uint32_t read_val_low = read_mem(mem_addr);
+                uint32_t read_val_high = read_mem(mem_addr + 4);
+                data0() = read_val_low;
+                data1 = read_val_high;
+                dm_log("[DM] Access Memory READ 64-bit: addr=0x%08x, low=0x%08x, high=0x%08x\n",
+                       mem_addr, read_val_low, read_val_high);
+            } else {
+                dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
+                data0() = 0;
             }
             
         // Implement aampostincrement: advance the address and write it back to the same source.
@@ -693,19 +721,24 @@ void DebugModule::execute_command(uint32_t value)
 // Register address mapping: 0x1000-0x101F (GPRs), 0x1020 (PC), 0x7B0 (DCSR), 0x7B1 (DPC), 0x0000-0x0FFF/0xC000-0xFFFF (CSRs).
 uint32_t DebugModule::read_register(uint16_t regaddr)
 {
+    unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
+    
     // General purpose registers (x0–x31) at addresses 0x1000–0x101F
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
         uint32_t value;
         if (emulator_ != nullptr) {
-            // Use emulator's warp 0, thread 0 register
+            // Use emulator's warp 0, selected thread register
             auto& warp0 = emulator_->get_warp(0);
-            value = static_cast<uint32_t>(warp0.ireg_file.at(gpr_index).at(0));
+            value = static_cast<uint32_t>(warp0.ireg_file.at(gpr_index).at(thread_id));
         } else {
             // No emulator available
             value = 0;
         }
-        dm_log("[DM] READ REG  x%d (0x%04x) -> 0x%08x\n", gpr_index, regaddr, value);
+        // Only log non-zero threads to reduce verbosity
+        if (thread_id != 0) {
+            dm_log("[DM] READ REG  x%d (0x%04x) thread=%u -> 0x%08x\n", gpr_index, regaddr, thread_id, value);
+        }
         return value;
     }
 
@@ -724,8 +757,12 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
     }
 
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        uint32_t value = dcsr_.to_u32();
-        dm_log("[DM] READ REG  dcsr (0x7B0) -> 0x%08x\n", value);
+        // Read DCSR for the selected thread
+        unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
+        uint32_t value = dcsr_[thread_id].to_u32();
+        if (thread_id != 0) {
+            dm_log("[DM] READ REG  dcsr (0x7B0) thread=%u -> 0x%08x\n", thread_id, value);
+        }
         return value;
     }
 
@@ -782,17 +819,23 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
 
 void DebugModule::write_register(uint16_t regaddr, uint32_t val)
 {
+    // Get selected thread ID from hartsel (clamp to 0 to NUM_THREADS-1)
+    unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
+    
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
         if (gpr_index == 0) {
-            dm_log("[DM] WRITE REG x0 (0x%04x) <- 0x%08x (ignored, x0 is read-only)\n", regaddr, val);
+            dm_log("[DM] WRITE REG x0 (0x%04x) thread=%u <- 0x%08x (ignored, x0 is read-only)\n", regaddr, thread_id, val);
             return;
         }
         if (emulator_ != nullptr) {
             auto& warp0 = emulator_->get_warp(0);
-            warp0.ireg_file.at(gpr_index).at(0) = val;
+            warp0.ireg_file.at(gpr_index).at(thread_id) = val;
         }
-        dm_log("[DM] WRITE REG x%d (0x%04x) <- 0x%08x\n", gpr_index, regaddr, val);
+        // Only log non-zero threads to reduce verbosity
+        if (thread_id != 0) {
+            dm_log("[DM] WRITE REG x%d (0x%04x) thread=%u <- 0x%08x\n", gpr_index, regaddr, thread_id, val);
+        }
         return;
     }
 
@@ -807,8 +850,12 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
     }
 
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        dcsr_.from_u32(val);
-        dm_log("[DM] WRITE REG dcsr (0x7B0) <- 0x%08x\n", val);
+        // Write DCSR for the selected thread
+        unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
+        dcsr_[thread_id].from_u32(val);
+        if (thread_id != 0) {
+            dm_log("[DM] WRITE REG dcsr (0x7B0) thread=%u <- 0x%08x\n", thread_id, val);
+        }
         return;
     }
 
@@ -900,14 +947,17 @@ bool DebugModule::write_memory_block(uint64_t addr, const uint8_t* src, size_t l
 void DebugModule::halt_hart(uint8_t cause)
 {
     dm_log("[DM] Halt requested - hart halted (cause=%u)\n", cause);
-    // Enter debug mode: update DCSR (DPC will be updated by emulator when it actually halts)
-    dcsr_.cause = cause & 0xF;
+    // Enter debug mode: update DCSR for all threads
+    // In SIMT model, all threads halt together, so set cause for all
+    for (unsigned i = 0; i < NUM_THREADS; i++) {
+        dcsr_[i].cause = cause & 0xF;
+    }
     is_halted_ = true;
     // Set halt flag so emulator will stop execution and update DPC
     set_halt_requested(true);
     update_dmstatus();
-    // Log DCSR value after setting cause to verify encoding
-    uint32_t dcsr_val = dcsr_.to_u32();
+    // Log DCSR value after setting cause to verify encoding (hart 0 only)
+    uint32_t dcsr_val = dcsr_[0].to_u32();
     uint8_t cause_field = (dcsr_val >> 8) & 0xF;
     dm_log("[DM] DCSR after halt: 0x%08x, cause field: 0x%x (should be 0x%x)\n", dcsr_val, cause_field, cause);
 }
@@ -927,9 +977,22 @@ void DebugModule::resume_hart(bool single_step)
         uint32_t dpc = dpc_;
         dm_log("[DM] Resume state: PC=0x%08x, DPC=0x%08x, halt_requested=%d\n", 
                current_pc, dpc, halt_requested_ ? 1 : 0);
+        
+        if (dcsr_[0].cause == 1) {
+            uint32_t bp_addr = dpc_;
+            if (bp_addr == 0) {
+                bp_addr = current_pc;
+            }
+            
+            if (has_breakpoint(bp_addr)) {
+                dm_log("[DM] Removing breakpoint at 0x%08x before resuming from EBREAK\n", bp_addr);
+                remove_breakpoint(bp_addr);
+            }
+        }
     }
 
-    bool do_step = single_step || dcsr_.step;
+
+    bool do_step = single_step || dcsr_[0].step;  // Use hart 0's step flag (shared in SIMT)
     if (do_step) {
         // Set single-step flag so emulator will execute one instruction then halt
         set_single_step_active(true);
@@ -1020,10 +1083,11 @@ void DebugModule::notify_program_completed(uint32_t final_pc)
         // Update DPC to final PC
         direct_write_register(0x7B1, final_pc);
         
-        // Mark as halted (cause 0 = reserved, but we use it for natural completion)
         is_halted_ = true;
         set_halt_requested(true);
-        dcsr_.cause = 0;  // Natural completion
+        for (unsigned i = 0; i < NUM_THREADS; i++) {
+            dcsr_[i].cause = 1;  // Use ebreak cause (generic halt)
+        }
     }
 }
 

@@ -27,6 +27,7 @@ openocd -f vortex.cfg
 
 ### Step 3: Connect GDB
 
+**For single-hart debugging (hart 0 only):**
 ```bash
 riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
 ```
@@ -46,6 +47,12 @@ riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
 (gdb) info registers
 (gdb) x/10i $pc        # Disassemble 10 instructions
 (gdb) x/s 0x80005740   # Print string at address
+
+# Multi-hart debugging (when using gdb_multi_target.gdb script)
+(gdb) info threads   # List all connected harts (inferiors 1-4)
+(gdb) thread 2       # Switch to hart 1 (inferior 2)
+(gdb) info registers   # View registers of current hart
+(gdb) print $a0        # Print register value for current hart
 ```
 
 ## Command-Line Options
@@ -93,7 +100,15 @@ Options:
 - **Software breakpoints:** Implemented using `EBREAK` instructions
 - **Single-step:** Full instruction-level stepping support
 - **Program completion:** Automatically detected and reported to GDB
+- **Multi-hart debugging:** Access all 4 harts simultaneously using the `gdb_multi_target.gdb` script
+- **Per-hart register inspection:** View each hart's registers independently
 - **RISC-V Debug Spec 0.13:** Full compliance with standard debug interface
+
+## Files
+
+- `vortex.cfg` - OpenOCD configuration (creates 4 targets on ports 3333-3336)
+- `gdb_multi_target.gdb` - Helper script to connect to all 4 harts (required for multi-hart debugging)
+- `test_multi_inferior.gdb` - Test script to verify all harts are accessible
 
 ## Additional Resources
 
