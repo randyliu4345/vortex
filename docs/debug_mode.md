@@ -25,8 +25,6 @@ The simulator starts halted, waiting for a debugger connection.
 openocd -f vortex.cfg
 ```
 
-**Note:** `vortex.cfg` uses port 9823. If using default port 9823, either:
-
 ### Step 3: Connect GDB
 
 ```bash
