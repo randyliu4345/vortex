@@ -36,6 +36,8 @@ except:
     gdb.execute('set $exec_file = "' + exec_file + '"')
 end
 
+set architecture riscv:rv64
+
 # Connect to target 0 (default inferior 1)
 target extended-remote localhost:3333
 echo Connected to inferior 1 (hart 0)\n
@@ -71,15 +73,15 @@ inferior 1
 echo \n=== All 4 harts connected! ===\n
 echo \n
 echo Commands:\n
-echo   info inferiors        - List all connected harts\n
-echo   inferior N            - Switch to hart N-1 (e.g. inferior 2 = hart 1)\n
+echo   info threads        - List all connected harts\n
+echo   thread N            - Switch to hart N-1 (e.g. thread 2 = hart 1)\n
 echo   info registers        - Show registers for current hart\n
 echo   print $a0             - Print register value\n
 echo \n
 echo Example workflow:\n
-echo   (gdb) inferior 1      # Switch to hart 0\n
+echo   (gdb) thread 1      # Switch to hart 0\n
 echo   (gdb) info registers  # View hart 0 registers\n
-echo   (gdb) inferior 2      # Switch to hart 1\n
+echo   (gdb) thread 2      # Switch to hart 1\n
 echo   (gdb) print $a0       # View hart 1's a0 register\n
 echo \n
 
