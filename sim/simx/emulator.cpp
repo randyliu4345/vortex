@@ -128,6 +128,10 @@ void Emulator::reset() {
   active_warps_.set(0);
   warps_[0].tmask.set(0);
   wspawn_.valid = false;
+  
+  // Reset last inactive warp tracking
+  last_inactive_warp_id_ = 0;
+  last_inactive_warp_pc_ = 0;
 }
 
 void Emulator::attach_ram(RAM* ram) {
@@ -188,9 +192,7 @@ instr_trace_t* Emulator::step() {
   if (scheduled_warp == -1) {
     // No warp is ready to execute - check if program has completed
     if (debug_module_ != nullptr && !active_warps_.any()) {
-      // Program completed - notify debug module with final PC
-      // Use warp 0's PC as the final PC (even if it's inactive, it should have the last PC)
-      uint32_t final_pc = static_cast<uint32_t>(warps_.at(0).PC);
+      uint32_t final_pc = (last_inactive_warp_pc_ != 0) ? last_inactive_warp_pc_ : static_cast<uint32_t>(warps_.at(0).PC);
       debug_module_->notify_program_completed(final_pc);
     }
     return nullptr;

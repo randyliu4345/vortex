@@ -137,8 +137,8 @@ int main(int argc, char **argv) {
       // Debug mode: run RBB server in infinite loop
       std::cout << "[DEBUG] Starting debug mode on port " << rbb_port << std::endl;
       
-      // Enable verbose logging for debug module
-      DebugModule::set_verbose_logging(true);
+      // Disable verbose logging for debug module (set to false to reduce noise)
+      DebugModule::set_verbose_logging(false);
       
       // Get emulator from processor
       Emulator* emulator = processor.get_first_emulator();

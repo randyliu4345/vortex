@@ -560,7 +560,7 @@ void DebugModule::execute_command(uint32_t value)
                 halt_hart(1);  // Cause 1 = ebreak instruction
                 return;  // Don't execute the instruction
             }
-
+            
             // Note: Step is handled by emulator, not here
             dm_log("[DM] STEP: PC=0x%08x (step handled by emulator)\n", pc);
         }
@@ -621,22 +621,22 @@ void DebugModule::execute_command(uint32_t value)
             mem_addr = 0;
             addr_src = ADDR_NONE;
         }
-
+        
         dm_log("[DM] EXECUTE COMMAND: Access Memory, addr=0x%08x, write=%d, aamsize=%u, postinc=%d\n",
                mem_addr, write ? 1 : 0, aamsize, aampostincrement ? 1 : 0);
 
         // Always perform one memory access per command.
-        if (write) {
-            // Write memory: DATA0 contains the data to write
-            uint32_t write_data = data0();
-
+            if (write) {
+                // Write memory: DATA0 contains the data to write
+                uint32_t write_data = data0();
+                
             dm_log("[DM] Access Memory WRITE: addr=0x%08x, data=0x%08x, size=%zu\n",
                    mem_addr, write_data, access_size);
-
-            if (access_size == 1) {
-                uint32_t old_val = read_mem(mem_addr);
-                write_mem(mem_addr, (old_val & ~0xFF) | (write_data & 0xFF));
-            } else if (access_size == 2) {
+                
+                if (access_size == 1) {
+                    uint32_t old_val = read_mem(mem_addr);
+                    write_mem(mem_addr, (old_val & ~0xFF) | (write_data & 0xFF));
+                } else if (access_size == 2) {
                 // Detect compressed EBREAK (0x9002) being written - save original instruction
                 if ((write_data & 0xFFFF) == 0x9002 && !has_breakpoint(mem_addr)) {
                     add_breakpoint(mem_addr);
@@ -644,9 +644,9 @@ void DebugModule::execute_command(uint32_t value)
                     // Non-EBREAK written to breakpoint address - breakpoint is being removed
                     remove_breakpoint(mem_addr);
                 }
-                uint32_t old_val = read_mem(mem_addr);
-                write_mem(mem_addr, (old_val & ~0xFFFF) | (write_data & 0xFFFF));
-            } else if (access_size == 4) {
+                    uint32_t old_val = read_mem(mem_addr);
+                    write_mem(mem_addr, (old_val & ~0xFFFF) | (write_data & 0xFFFF));
+                } else if (access_size == 4) {
                 // Detect EBREAK instruction (32-bit: 0x00100073 or compressed: 0x00009002) being written
                 bool is_ebreak = (write_data == 0x00100073) || ((write_data & 0xFFFF) == 0x9002);
                 if (is_ebreak && !has_breakpoint(mem_addr)) {
@@ -655,10 +655,10 @@ void DebugModule::execute_command(uint32_t value)
                     // Non-EBREAK written to breakpoint address - breakpoint is being removed
                     remove_breakpoint(mem_addr);
                 }
-                write_mem(mem_addr, write_data);
-            } else {
-                dm_log("[DM] Access Memory: unsupported write size %zu\n", access_size);
-            }
+                    write_mem(mem_addr, write_data);
+                } else {
+                    dm_log("[DM] Access Memory: unsupported write size %zu\n", access_size);
+                }
         } else {
             if (access_size == 1) {
                 uint32_t read_val = read_mem(mem_addr);
@@ -681,11 +681,10 @@ void DebugModule::execute_command(uint32_t value)
                 dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
                 data0() = 0;
             }
-        }
-
+            
         // Implement aampostincrement: advance the address and write it back to the same source.
         uint32_t new_addr = mem_addr;
-        if (aampostincrement) {
+            if (aampostincrement) {
             new_addr = mem_addr + access_size;
             switch (addr_src) {
                 case ADDR_DATA2:
@@ -707,8 +706,8 @@ void DebugModule::execute_command(uint32_t value)
             }
             access_mem_addr = new_addr;
             access_mem_addr_valid = true;
-        } else {
-            access_mem_addr = mem_addr;
+            } else {
+                access_mem_addr = mem_addr;
             access_mem_addr_valid = true;
         }
     } else {
@@ -1114,7 +1113,7 @@ void DebugModule::run_test_idle()
     } else {
         // Only log occasionally when halted too
         if ((log_counter++ % 1000) == 0) {
-            dm_log("[DM] run_test_idle: hart is halted, nothing to do\n");
+        dm_log("[DM] run_test_idle: hart is halted, nothing to do\n");
         }
     }
 }
