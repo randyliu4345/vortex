@@ -14,7 +14,7 @@ This guide explains how to debug Vortex programs using GDB and OpenOCD with the 
 
 ```bash
 cd /vortex
-./build/sim/simx/simx -d -p 9824 build/tests/kernel/fibonacci/fibonacci.bin
+./build/sim/simx/simx -d build/tests/kernel/fibonacci/fibonacci.bin
 ```
 
 The simulator starts halted, waiting for a debugger connection.
@@ -25,9 +25,7 @@ The simulator starts halted, waiting for a debugger connection.
 openocd -f vortex.cfg
 ```
 
-**Note:** `vortex.cfg` uses port 9824. If using default port 9823, either:
-- Start simulator with `-p 9824`, or
-- Update `vortex.cfg` to use port 9823
+**Note:** `vortex.cfg` uses port 9823. If using default port 9823, either:
 
 ### Step 3: Connect GDB
 
@@ -35,23 +33,9 @@ openocd -f vortex.cfg
 riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
 ```
 
-In GDB:
-```
-(gdb) target remote localhost:3333
-(gdb) monitor reset halt
-(gdb) set $pc = 0x80000000
-(gdb) break main
-(gdb) continue
-```
-
 ## Common GDB Commands
 
 ```bash
-# Breakpoints
-(gdb) break main
-(gdb) break fibonacci
-(gdb) break main.cpp:16
-
 # Execution control
 (gdb) continue          # Continue execution
 (gdb) step             # Step into function
@@ -60,7 +44,7 @@ In GDB:
 (gdb) nexti            # Next instruction
 
 # Inspection
-(gdb) print variable
+(gdb) print t4
 (gdb) info registers
 (gdb) x/10i $pc        # Disassemble 10 instructions
 (gdb) x/s 0x80005740   # Print string at address
@@ -105,27 +89,6 @@ Options:
 **Breakpoints not working:**
 - Ensure address is in executable memory (0x80000000+)
 - Verify program hasn't already passed that address
-
-## Example Session
-
-```bash
-# Terminal 1
-./build/sim/simx/simx -d -p 9824 build/tests/kernel/fibonacci/fibonacci.bin
-
-# Terminal 2
-openocd -f vortex.cfg
-
-# Terminal 3
-riscv64-unknown-elf-gdb
-(gdb) target remote localhost:3333
-(gdb) stepi
-(gdb) b *0x80000094
-(gdb) continue
-(gdb) i r
-(gdb) continue
-Continuing.
-Program Stopped
-```
 
 ## Features
 
