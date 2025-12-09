@@ -708,7 +708,8 @@ void DebugModule::execute_command(uint32_t value)
             access_mem_addr_valid = true;
             } else {
                 access_mem_addr = mem_addr;
-            access_mem_addr_valid = true;
+                access_mem_addr_valid = true;
+            }
         }
     } else {
         abstractcs.cmderr = 2;  // NOTSUP
