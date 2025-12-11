@@ -25,8 +25,6 @@ The simulator starts halted, waiting for a debugger connection.
 openocd -f vortex.cfg
 ```
 
-**Note:** `vortex.cfg` uses port 9823. If using default port 9823, either:
-
 ### Step 3: Connect GDB
 
 **For single-hart debugging (hart 0 only):**
@@ -50,12 +48,49 @@ riscv64-unknown-elf-gdb build/tests/kernel/fibonacci/fibonacci.elf
 (gdb) x/10i $pc        # Disassemble 10 instructions
 (gdb) x/s 0x80005740   # Print string at address
 
-# Multi-hart debugging (when using gdb_multi_target.gdb script)
-(gdb) info threads   # List all connected harts (inferiors 1-4)
-(gdb) thread 2       # Switch to hart 1 (inferior 2)
-(gdb) info registers   # View registers of current hart
-(gdb) print $a0        # Print register value for current hart
 ```
+
+## Multi-Threading Support
+
+Vortex supports debugging multiple hardware threads (harts) simultaneously using the single-target approach:
+
+```bash
+# Terminal 1: Start simulator
+./build/sim/simx/simx -d build/tests/kernel/vecadd/vecadd.bin
+
+# Terminal 2: Start OpenOCD
+openocd -f vortex.cfg
+
+# Terminal 3: Connect GDB with single-target script
+riscv64-unknown-elf-gdb build/tests/kernel/vecadd/vecadd.elf -x gdb_multithread.gdb
+```
+
+**Available Commands:**
+- `hart N` - Switch to hart N (0-3)
+  ```bash
+  (gdb) hart 1    # Switch to hart 1
+  (gdb) hart 2    # Switch to hart 2
+  ```
+- `rreg <name>` - Read register for the current hart
+  ```bash
+  (gdb) rreg pc   # Read PC register
+  (gdb) rreg a0   # Read a0 register
+  (gdb) rreg a2   # Read a2 register
+  ```
+
+**Example Usage:**
+```bash
+(gdb) b vecadd_kernel      # Set breakpoint
+(gdb) c           #continue to breakpoint
+(gdb) hart 0      # Switch to hart 0
+(gdb) rreg pc     # Read PC for hart 0
+(gdb) hart 1      # Switch to hart 1
+(gdb) rreg a2     # Read a0 for hart 1
+(gdb) delete 1    # delete breakpoint for continuous execution
+(gdb) continue    # Continue execution (all harts resume)
+```
+
+**Note:** This approach uses a single OpenOCD target and switches between harts using the `hartsel` register. Execution control (continue, step, etc.) affects all harts simultaneously since they share the same PC in SIMT execution.
 
 ## Command-Line Options
 
@@ -102,15 +137,14 @@ Options:
 - **Software breakpoints:** Implemented using `EBREAK` instructions
 - **Single-step:** Full instruction-level stepping support
 - **Program completion:** Automatically detected and reported to GDB
-- **Multi-hart debugging:** Access all 4 harts simultaneously using the `gdb_multi_target.gdb` script
+- **Multi-hart debugging:** Access all 4 harts simultaneously using the `gdb_multithread.gdb` script with `hart` and `rreg` commands
 - **Per-hart register inspection:** View each hart's registers independently
 - **RISC-V Debug Spec 0.13:** Full compliance with standard debug interface
 
 ## Files
 
-- `vortex.cfg` - OpenOCD configuration (creates 4 targets on ports 3333-3336)
-- `gdb_multi_target.gdb` - Helper script to connect to all 4 harts (required for multi-hart debugging)
-- `test_multi_inferior.gdb` - Test script to verify all harts are accessible
+- `vortex.cfg` - OpenOCD configuration for single-target multi-hart debugging
+- `gdb_multithread.gdb` - Helper script that provides `hart` and `rreg` commands for multi-hart debugging
 
 ## Additional Resources
 

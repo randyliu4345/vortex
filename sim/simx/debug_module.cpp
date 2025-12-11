@@ -204,7 +204,10 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
 // Returns true on success, false for unimplemented addresses.
 bool DebugModule::dmi_write(unsigned address, uint32_t value)
 {
-    dm_log("[DM] DMI WRITE addr=0x%x data=0x%x\n", address, value);
+    // Skip logging dmcontrol writes (address 0x10) as they're too verbose
+    if (address != DM_DMCONTROL) {
+        dm_log("[DM] DMI WRITE addr=0x%x data=0x%x\n", address, value);
+    }
 
     switch (address) {
         case DM_DMCONTROL:
@@ -681,10 +684,11 @@ void DebugModule::execute_command(uint32_t value)
                 dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
                 data0() = 0;
             }
+        }
             
         // Implement aampostincrement: advance the address and write it back to the same source.
         uint32_t new_addr = mem_addr;
-            if (aampostincrement) {
+        if (aampostincrement) {
             new_addr = mem_addr + access_size;
             switch (addr_src) {
                 case ADDR_DATA2:
@@ -706,8 +710,8 @@ void DebugModule::execute_command(uint32_t value)
             }
             access_mem_addr = new_addr;
             access_mem_addr_valid = true;
-            } else {
-                access_mem_addr = mem_addr;
+        } else {
+            access_mem_addr = mem_addr;
             access_mem_addr_valid = true;
         }
     } else {
