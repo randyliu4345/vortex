@@ -1077,6 +1077,15 @@ void DebugModule::remove_breakpoint(uint32_t addr)
     software_breakpoints_.erase(it);
 }
 
+uint32_t DebugModule::get_original_instruction(uint32_t addr) const
+{
+    auto it = software_breakpoints_.find(addr);
+    if (it != software_breakpoints_.end()) {
+        return it->second;  // Return stored original instruction
+    }
+    return 0;  // No breakpoint at this address
+}
+
 // Notification from emulator when program completes naturally
 void DebugModule::notify_program_completed(uint32_t final_pc)
 {

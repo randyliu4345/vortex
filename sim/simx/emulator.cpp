@@ -221,14 +221,21 @@ instr_trace_t* Emulator::step() {
     if (debug_module_ != nullptr) {
       bool is_ebreak = (instr_code == 0x00100073) || ((instr_code & 0xFFFF) == 0x9002);
       if (is_ebreak && debug_module_->has_breakpoint(warp.PC)) {
-        // Software breakpoint hit - update DPC with emulator's PC and halt
-        std::cout << "[EMU] Breakpoint hit at PC=0x" << std::hex << warp.PC << std::dec << std::endl;
-        uint32_t emulator_pc = static_cast<uint32_t>(warp.PC);
-        debug_module_->direct_write_register(0x7B1, emulator_pc);  // Update DPC register
-        debug_module_->halt_hart(1);  // Cause 1 = ebreak instruction
-        debug_module_->set_halt_requested(true);
-        // No need to suspend - halt_requested_ check at start of step() will prevent execution
-        return nullptr;
+        if (scheduled_warp == 0) {
+          // Warp 0: halt on breakpoint (debug module tracks warp 0)
+          std::cout << "[EMU] Breakpoint hit at PC=0x" << std::hex << warp.PC << " (warp " << std::dec << scheduled_warp << ")" << std::endl;
+          uint32_t emulator_pc = static_cast<uint32_t>(warp.PC);
+          debug_module_->direct_write_register(0x7B1, emulator_pc);  // Update DPC register
+          debug_module_->halt_hart(1);  // Cause 1 = ebreak instruction
+          debug_module_->set_halt_requested(true);
+          return nullptr;
+        } else {
+          // Other warps: replace EBREAK with original instruction to avoid trigger_ebreak()
+          uint32_t original_instr = debug_module_->get_original_instruction(warp.PC);
+          if (original_instr != 0) {
+            instr_code = original_instr;  // Replace EBREAK with original instruction
+          }
+        }
       }
     }
 
