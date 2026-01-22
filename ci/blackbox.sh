@@ -19,7 +19,7 @@ ROOT_DIR=$SCRIPT_DIR/..
 show_usage()
 {
     echo "Vortex BlackBox Test Driver v1.0"
-    echo "Usage: $0 [[--clusters=#n] [--cores=#n] [--warps=#n] [--threads=#n] [--l2cache] [--l3cache] [[--driver=#name] [--app=#app] [--args=#args] [--debug=#level] [--scope] [--perf=#class] [--log=logfile] [--nohup] [--help]]"
+    echo "Usage: $0 [[--clusters=#n] [--cores=#n] [--warps=#n] [--threads=#n] [--l2cache] [--l3cache] [[--driver=#name] [--app=#app] [--args=#args] [--debug=#level] [--debug-port=#port] [--scope] [--perf=#class] [--log=logfile] [--nohup] [--help]]"
 }
 
 show_help()
@@ -29,6 +29,7 @@ show_help()
     echo "--driver: gpu, simx, rtlsim, oape, xrt"
     echo "--app: any subfolder test under regression or opencl"
     echo "--class: 0=disable, 1=pipeline, 2=memsys"
+    echo "--debug-port: enable debug mode with RBB server on specified port (default: 9823)"
     echo "--nohup: build and run in temp directory"
 }
 
@@ -45,6 +46,7 @@ DEFAULTS() {
     APP=sgemm
     DEBUG=0
     DEBUG_LEVEL=0
+    DEBUG_PORT=0
     SCOPE=0
     HAS_ARGS=0
     PERF_CLASS=0
@@ -67,6 +69,7 @@ parse_args() {
             --l3cache)  CONFIGS=$(add_option "$CONFIGS" "-DL3_ENABLE") ;;
             --perf=*)   CONFIGS=$(add_option "$CONFIGS" "-DPERF_ENABLE"); PERF_CLASS=${i#*=} ;;
             --debug=*)  DEBUG=1; DEBUG_LEVEL=${i#*=} ;;
+            --debug-port=*) DEBUG_PORT=${i#*=} ;;
             --scope)    SCOPE=1; ;;
             --args=*)   HAS_ARGS=1; ARGS=${i#*=} ;;
             --log=*)    LOGFILE=${i#*=} ;;
@@ -148,6 +151,13 @@ main() {
 
     export VORTEX_PROFILING=$PERF_CLASS
 
+    # Export debug mode for runtime if debug port is specified
+    if [ $DEBUG_PORT -ne 0 ]; then
+        export VORTEX_DEBUG_MODE=1
+        export VORTEX_DEBUG_PORT=$DEBUG_PORT
+        export VORTEX_DEBUG_COMPILE=1
+    fi
+
     make -C "$ROOT_DIR/hw" config > /dev/null
     make -C "$ROOT_DIR/runtime/stub" > /dev/null
 
@@ -163,6 +173,14 @@ main() {
     fi
 
     build_driver
+    
+    # Force kernel rebuild with debug flags if debug mode is enabled
+    if [ $DEBUG_PORT -ne 0 ]; then
+        echo "[DEBUG] Forcing kernel rebuild with debug flags..."
+        make -C "$APP_PATH" clean-kernel VORTEX_DEBUG_COMPILE=1 > /dev/null 2>&1
+        make -C "$APP_PATH" kernel.elf VORTEX_DEBUG_COMPILE=1
+    fi
+    
     run_app
     status=$?
 

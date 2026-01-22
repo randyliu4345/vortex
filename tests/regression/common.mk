@@ -46,10 +46,17 @@ VX_CP  = $(LLVM_VORTEX)/bin/llvm-objcopy
 #VX_DP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objdump
 #VX_CP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objcopy
 
+# Debug-friendly compilation for kernels when VORTEX_DEBUG_COMPILE is set
+ifdef VORTEX_DEBUG_COMPILE
+VX_CFLAGS += -g -O0 -mcmodel=medany -fno-rtti -fno-exceptions -nostartfiles -nostdlib -fdata-sections -ffunction-sections
+else
 VX_CFLAGS += -O3 -mcmodel=medany -fno-rtti -fno-exceptions -nostartfiles -nostdlib -fdata-sections -ffunction-sections
+endif
 VX_CFLAGS += -I$(VORTEX_HOME)/kernel/include -I$(ROOT_DIR)/hw -I$(SW_COMMON_DIR)
 VX_CFLAGS += -DXLEN_$(XLEN)
+ifndef VORTEX_DEBUG_COMPILE
 VX_CFLAGS += -DNDEBUG
+endif
 VX_CFLAGS += $(CONFIGS)
 
 VX_LIBS += -L$(LIBC_VORTEX)/lib -lm -lc
