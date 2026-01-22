@@ -36,16 +36,16 @@ bool DebugModule::verbose_logging() {
 // Use case: Creates a debug module instance that implements the RISC-V Debug Specification 0.13.
 DebugModule::DebugModule(vortex::Emulator* emulator, size_t mem_size)
     : emulator_(emulator),
-      command(0),
-      resumereq_prev(false),
+      halt_requested_(false),
+      single_step_active_(false),
+      debug_mode_enabled_(false),
       data1(0),
       data2(0),
       data3(0),
+      command(0),
+      resumereq_prev(false),
       memory(mem_size, 0),
-      access_mem_addr(0),
-      halt_requested_(false),
-      single_step_active_(false),
-      debug_mode_enabled_(false)
+      access_mem_addr(0)
 {
     for (unsigned i = 0; i < datacount; i++) {
         dmdata[i] = 0;
@@ -218,11 +218,9 @@ bool DebugModule::dmi_write(unsigned address, uint32_t value)
             return write_data0(value);
         case 0x5:  // DATA1
             data1 = value;
-            dm_log("[DM] DATA1 written: 0x%08x\n", value);
             return true;
         case 0x6:  // DATA2
             data2 = value;
-            dm_log("[DM] DATA2 written: 0x%08x\n", value);
             return true;
         case 0x7:  // DATA3
             data3 = value;
@@ -410,7 +408,8 @@ bool DebugModule::write_dmcontrol(uint32_t value)
     // - hartsello in bits [15:6]  
     // - hartselhi in bits [25:16]
     // For values 0-1023, OpenOCD typically just uses hartselhi (bits 25:16)
-    unsigned hartsello = (value >> 6) & 0x3ff;   // Bits [15:6]
+    // hartsello is bits [15:6], but we don't use it for single-hart systems
+    (void)((value >> 6) & 0x3ff);   // Bits [15:6] - unused for now
     unsigned hartselhi = (value >> 16) & 0x3ff;  // Bits [25:16]
     
     // For typical single-hart systems, hartselhi contains the hart ID directly
@@ -475,7 +474,6 @@ bool DebugModule::write_command(uint32_t value)
 bool DebugModule::write_data0(uint32_t value)
 {
     dmdata[0] = value;
-    dm_log("[DM] DATA0 written: 0x%08x\n", value);
     return true;
 }
 
@@ -538,8 +536,24 @@ void DebugModule::execute_command(uint32_t value)
             } else {
                 data0() = read_register(regaddr);
                 if (aarsize == 3) {
-                    // 64-bit read - upper 32 bits should be 0 for 32-bit registers
-                    data1 = 0;
+                    // 64-bit read - return upper 32 bits in DATA1
+                    if (emulator_ != nullptr) {
+                        auto& warp0 = emulator_->get_warp(0);
+                        if (regaddr == 0x1020) {
+                            // PC (0x1020): return upper 32 bits of the 64-bit PC
+                            data1 = static_cast<uint32_t>(warp0.PC >> 32);
+                        } else if (regaddr == 0x07b1 || regaddr == 0x7B1) {
+                            // DPC (0x7B1): DPC is 32-bit, but return upper 32 bits of actual PC
+                            // so GDB can reconstruct the full 64-bit address
+                            data1 = static_cast<uint32_t>(warp0.PC >> 32);
+                        } else {
+                            // For other registers, upper 32 bits are 0
+                            data1 = 0;
+                        }
+                    } else {
+                        // No emulator available, upper 32 bits are 0
+                        data1 = 0;
+                    }
                 } else {
                     // 32-bit read - clear DATA1 to prevent corruption
                     data1 = 0;
@@ -598,42 +612,86 @@ void DebugModule::execute_command(uint32_t value)
             ADDR_PREV
         } addr_src = ADDR_NONE;
 
-        uint32_t mem_addr = 0;
+        uint64_t mem_addr = 0;
 
-        // If this looks like a continuation of a postincrement sequence (no explicit address
-        // in DATA[0-2]), reuse the last address.
-        if (aampostincrement &&
-            access_mem_addr_valid &&
-            data2 == 0 && data1 == 0 && data0() == 0) {
+        // Determine if we're in 64-bit address space by checking PC/DPC
+        // If PC >= 0x100000000, we're in 64-bit space and addresses >= 0x80000000 need translation
+        // If PC < 0x100000000, we're in 32-bit space and addresses should be used as-is
+        // This fixes the issue where kernels using 32-bit addresses (0x80000000) were incorrectly
+        // translated to 64-bit addresses (0x180000000), causing wrong memory access.
+        bool use_64bit_addr_space = false;
+        if (emulator_ != nullptr) {
+            auto& warp0 = emulator_->get_warp(0);
+            uint64_t pc = warp0.PC;
+            use_64bit_addr_space = (pc >= 0x100000000ULL);
+        } else {
+            // Fallback: DPC is 32-bit, so if emulator not available, assume 32-bit space (no translation)
+            // This is safe because DPC < 0x100000000 by definition (it's uint32_t)
+            use_64bit_addr_space = false;
+        }
+
+        // If post-increment is set and we have a previous address, use it
+        // (DATA registers may contain data from previous read, not address components)
+        if (aampostincrement && access_mem_addr_valid) {
             mem_addr = access_mem_addr;
             addr_src = ADDR_PREV;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 1 (post-increment) -> 0x%016lx\n", mem_addr);
+        } else if (data2 != 0 && data2 >= 0x80000000 && use_64bit_addr_space) {
+            // HACK: If DATA2 >= 0x80000000 AND we're in 64-bit address space (PC >= 0x100000000),
+            //       assume it's the lower 32 bits of a 64-bit address with upper 32 bits = 0x1
+            //       (i.e., 0x180000000 + DATA2)
+            //       This fixes breakpoints being set at wrong addresses for kernels using 64-bit addresses.
+            //       GDB sends 0x800000a8, we translate to 0x18000000a8
+            //       BUT: For kernels using 32-bit addresses (PC < 0x100000000), we DON'T translate
+            //       This applies to both reads and writes (fixed: previously only worked for reads)
+            // Ignore DATA1 even if non-zero, as it likely contains data from a previous read
+            mem_addr = ((uint64_t)0x1 << 32) | (uint64_t)data2;
+            addr_src = ADDR_DATA2;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 2 (DATA2>=0x80000000, 64-bit space) DATA2=0x%08x -> 0x%016lx\n", data2, mem_addr);
+        } else if (data2 != 0 && data2 >= 0x80000000) {
+            // DATA2 >= 0x80000000 but we're in 32-bit address space - use as-is (no translation)
+            mem_addr = data2;
+            addr_src = ADDR_DATA2;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 2b (DATA2>=0x80000000, 32-bit space) DATA2=0x%08x -> 0x%016lx\n", data2, mem_addr);
+        } else if (data2 != 0 && data1 != 0 && data2 < 0x80000000) {
+            // Only construct 64-bit address from DATA2/DATA1 if DATA2 < 0x80000000
+            // (DATA2 (upper 32 bits) and DATA1 (lower 32 bits))
+            mem_addr = ((uint64_t)data2 << 32) | (uint64_t)data1;
+            addr_src = ADDR_DATA2;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 3 (DATA2|DATA1 64-bit) DATA2=0x%08x DATA1=0x%08x -> 0x%016lx\n", data2, data1, mem_addr);
         } else if (data2 != 0) {
             mem_addr = data2;
             addr_src = ADDR_DATA2;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 4 (DATA2 only) DATA2=0x%08x -> 0x%016lx\n", data2, mem_addr);
+        } else if (data1 != 0 && !write && data0() > 0x7FFFFFFF) {
+            // For reads: 64-bit address with DATA1 (upper) and DATA0 (lower)
+            mem_addr = ((uint64_t)data1 << 32) | (uint64_t)data0();
+            addr_src = ADDR_DATA1;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 5 (DATA1|DATA0 64-bit read) DATA1=0x%08x DATA0=0x%08x -> 0x%016lx\n", data1, data0(), mem_addr);
         } else if (data1 != 0) {
             mem_addr = data1;
             addr_src = ADDR_DATA1;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 6 (DATA1 only) DATA1=0x%08x -> 0x%016lx\n", data1, mem_addr);
         } else if (data0() != 0) {
             mem_addr = data0();
             addr_src = ADDR_DATA0;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 7 (DATA0 only) DATA0=0x%08x -> 0x%016lx\n", data0(), mem_addr);
         } else if (access_mem_addr_valid) {
-            // Fallback to previous address if we have one.
             mem_addr = access_mem_addr;
             addr_src = ADDR_PREV;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 8 (previous address) -> 0x%016lx\n", mem_addr);
         } else {
             mem_addr = 0;
             addr_src = ADDR_NONE;
+            dm_log("[DM] ADDR_TRANSLATE: Branch 9 (NONE/fallback) -> 0x%016lx\n", mem_addr);
         }
-        
-        dm_log("[DM] EXECUTE COMMAND: Access Memory, addr=0x%08x, write=%d, aamsize=%u, postinc=%d\n",
-               mem_addr, write ? 1 : 0, aamsize, aampostincrement ? 1 : 0);
 
         // Always perform one memory access per command.
             if (write) {
                 // Write memory: DATA0 contains the data to write
                 uint32_t write_data = data0();
                 
-            dm_log("[DM] Access Memory WRITE: addr=0x%08x, data=0x%08x, size=%zu\n",
+            dm_log("[DM] Access Memory WRITE: addr=0x%016lx, data=0x%08x, size=%zu\n",
                    mem_addr, write_data, access_size);
                 
                 if (access_size == 1) {
@@ -672,13 +730,13 @@ void DebugModule::execute_command(uint32_t value)
             } else if (access_size == 4) {
                 uint32_t read_val = read_mem(mem_addr);
                 data0() = read_val;
-            } else if (access_size == 8) {
+                } else if (access_size == 8) {
                 // 64-bit read: lower 32 bits in DATA0, upper 32 bits in DATA1
                 uint32_t read_val_low = read_mem(mem_addr);
                 uint32_t read_val_high = read_mem(mem_addr + 4);
                 data0() = read_val_low;
                 data1 = read_val_high;
-                dm_log("[DM] Access Memory READ 64-bit: addr=0x%08x, low=0x%08x, high=0x%08x\n",
+                dm_log("[DM] Access Memory READ 64-bit: addr=0x%016lx, low=0x%08x, high=0x%08x\n",
                        mem_addr, read_val_low, read_val_high);
             } else {
                 dm_log("[DM] Access Memory: unsupported read size %zu\n", access_size);
@@ -687,29 +745,58 @@ void DebugModule::execute_command(uint32_t value)
         }
             
         // Implement aampostincrement: advance the address and write it back to the same source.
-        uint32_t new_addr = mem_addr;
+        // For reads, don't overwrite the read data - only update the address tracking.
+        uint64_t new_addr = mem_addr;
         if (aampostincrement) {
             new_addr = mem_addr + access_size;
-            switch (addr_src) {
-                case ADDR_DATA2:
-                    data2 = new_addr;
-                    break;
-                case ADDR_DATA1:
-                    data1 = new_addr;
-                    break;
-                case ADDR_DATA0:
-                    data0() = new_addr;
-                    break;
-                case ADDR_NONE:
-                case ADDR_PREV:
-                default:
-                    // When address came from a previous implicit address sequence,
-                    // follow the spec and leave the updated address in DATA0.
-                    data0() = new_addr;
-                    break;
+            // For reads, we've already stored the data in DATA registers, so don't overwrite them
+            // Only update the address tracking for the next access
+            if (!write) {
+                // Don't overwrite read data - just track the new address
+                access_mem_addr = new_addr;
+                access_mem_addr_valid = true;
+            } else {
+                // For writes, update the address in the appropriate DATA register
+                switch (addr_src) {
+                    case ADDR_DATA2:
+                        // For 64-bit addresses, store upper 32 bits in DATA2, lower in DATA1
+                        if (mem_addr > UINT32_MAX) {
+                            data2 = static_cast<uint32_t>(new_addr >> 32);
+                            data1 = static_cast<uint32_t>(new_addr);
+                        } else {
+                            data2 = static_cast<uint32_t>(new_addr);
+                            data1 = 0;
+                        }
+                        break;
+                    case ADDR_DATA1:
+                        // For 64-bit addresses, store upper 32 bits in DATA1, lower in DATA0
+                        if (mem_addr > UINT32_MAX) {
+                            data1 = static_cast<uint32_t>(new_addr >> 32);
+                            data0() = static_cast<uint32_t>(new_addr);
+                        } else {
+                            data1 = static_cast<uint32_t>(new_addr);
+                        }
+                        break;
+                    case ADDR_DATA0:
+                        data0() = static_cast<uint32_t>(new_addr);
+                        break;
+                    case ADDR_NONE:
+                    case ADDR_PREV:
+                    default:
+                        // When address came from a previous implicit address sequence,
+                        // follow the spec and leave the updated address in DATA0.
+                        // For 64-bit addresses, store upper 32 bits in DATA1, lower in DATA0
+                        if (mem_addr > UINT32_MAX) {
+                            data1 = static_cast<uint32_t>(new_addr >> 32);
+                            data0() = static_cast<uint32_t>(new_addr);
+                        } else {
+                            data0() = static_cast<uint32_t>(new_addr);
+                        }
+                        break;
+                }
+                access_mem_addr = new_addr;
+                access_mem_addr_valid = true;
             }
-            access_mem_addr = new_addr;
-            access_mem_addr_valid = true;
         } else {
             access_mem_addr = mem_addr;
             access_mem_addr_valid = true;
@@ -776,7 +863,7 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         return value;
     }
 
-    if (regaddr >= 0x0000 && regaddr <= 0x0FFF) {
+    if (regaddr <= 0x0FFF) {
         uint16_t csr_num = regaddr;
 
         if (csr_num == 0x0301) {
@@ -796,7 +883,7 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         return 0;
     }
 
-    if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
+    if (regaddr >= 0xC000) {
         uint16_t csr_num = regaddr - 0xC000;
 
         if (csr_num == 0x0301) {
@@ -869,7 +956,7 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
         return;
     }
 
-    if (regaddr >= 0xC000 && regaddr <= 0xFFFF) {
+    if (regaddr >= 0xC000) {
         dm_log("[DM] WRITE REG csr[0x%04x] (0x%04x) <- 0x%08x (ignored)\n", regaddr - 0xC000, regaddr, val);
         return;
     }
@@ -879,26 +966,20 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
 
 uint32_t DebugModule::read_mem(uint64_t addr)
 {
-    if (addr > UINT32_MAX) {
-        dm_log("[DM] READ MEM  addr=0x%llx -> ADDRESS TOO LARGE\n", (unsigned long long)addr);
-        return 0;
-    }
-    uint32_t val = read_program_memory(static_cast<uint32_t>(addr));
-    dm_log("[DM] READ MEM  addr=0x%llx -> 0x%x\n", (unsigned long long)addr, val);
+    // Pass 64-bit address directly - dcache_read accepts uint64_t
+    uint32_t val = read_program_memory(addr);
+    dm_log("[DM] READ MEM  addr=0x%016lx -> 0x%x\n", addr, val);
     return val;
 }
 
 void DebugModule::write_mem(uint64_t addr, uint32_t val)
 {
-    if (addr > UINT32_MAX) {
-        dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x ADDRESS TOO LARGE\n", (unsigned long long)addr, val);
-        return;
-    }
-    write_program_memory(static_cast<uint32_t>(addr), val);
-    dm_log("[DM] WRITE MEM addr=0x%llx <- 0x%x\n", (unsigned long long)addr, val);
+    // Pass 64-bit address directly - dcache_write accepts uint64_t
+    write_program_memory(addr, val);
+    dm_log("[DM] WRITE MEM addr=0x%016lx <- 0x%x\n", addr, val);
 }
 
-uint32_t DebugModule::read_program_memory(uint32_t addr) const
+uint32_t DebugModule::read_program_memory(uint64_t addr) const
 {
     if (!emulator_) {
         return 0;
@@ -908,7 +989,7 @@ uint32_t DebugModule::read_program_memory(uint32_t addr) const
     return value;
 }
 
-void DebugModule::write_program_memory(uint32_t addr, uint32_t value)
+void DebugModule::write_program_memory(uint64_t addr, uint32_t value)
 {
     if (!emulator_) {
         return;
@@ -977,19 +1058,23 @@ void DebugModule::resume_hart(bool single_step)
     // Log current program state before resuming
     if (emulator_ != nullptr) {
         auto& warp0 = emulator_->get_warp(0);
-        uint32_t current_pc = static_cast<uint32_t>(warp0.PC);
+        uint64_t current_pc = warp0.PC;
         uint32_t dpc = dpc_;
-        dm_log("[DM] Resume state: PC=0x%08x, DPC=0x%08x, halt_requested=%d\n", 
+        dm_log("[DM] Resume state: PC=0x%016lx, DPC=0x%08x, halt_requested=%d\n", 
                current_pc, dpc, halt_requested_ ? 1 : 0);
         
         if (dcsr_[0].cause == 1) {
-            uint32_t bp_addr = dpc_;
+            uint64_t bp_addr = dpc_;
             if (bp_addr == 0) {
                 bp_addr = current_pc;
+            } else {
+                // DPC is 32-bit, but we need the full 64-bit address
+                // Use the upper 32 bits from the actual PC
+                bp_addr = (current_pc & 0xFFFFFFFF00000000ULL) | bp_addr;
             }
             
             if (has_breakpoint(bp_addr)) {
-                dm_log("[DM] Removing breakpoint at 0x%08x before resuming from EBREAK\n", bp_addr);
+                dm_log("[DM] Removing breakpoint at 0x%016lx before resuming from EBREAK\n", bp_addr);
                 remove_breakpoint(bp_addr);
             }
         }
@@ -1051,12 +1136,12 @@ void DebugModule::set_debug_mode_enabled(bool enabled)
     debug_mode_enabled_ = enabled;
 }
 
-bool DebugModule::has_breakpoint(uint32_t addr) const
+bool DebugModule::has_breakpoint(uint64_t addr) const
 {
     return software_breakpoints_.find(addr) != software_breakpoints_.end();
 }
 
-void DebugModule::add_breakpoint(uint32_t addr)
+void DebugModule::add_breakpoint(uint64_t addr)
 {
     if (has_breakpoint(addr)) {
         return; // Already has breakpoint
@@ -1066,7 +1151,7 @@ void DebugModule::add_breakpoint(uint32_t addr)
     software_breakpoints_[addr] = original;
 }
 
-void DebugModule::remove_breakpoint(uint32_t addr)
+void DebugModule::remove_breakpoint(uint64_t addr)
 {
     auto it = software_breakpoints_.find(addr);
     if (it == software_breakpoints_.end()) {
@@ -1077,7 +1162,7 @@ void DebugModule::remove_breakpoint(uint32_t addr)
     software_breakpoints_.erase(it);
 }
 
-uint32_t DebugModule::get_original_instruction(uint32_t addr) const
+uint32_t DebugModule::get_original_instruction(uint64_t addr) const
 {
     auto it = software_breakpoints_.find(addr);
     if (it != software_breakpoints_.end()) {

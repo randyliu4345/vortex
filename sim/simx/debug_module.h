@@ -157,10 +157,10 @@ public:
     void set_debug_mode_enabled(bool enabled);
     
     // Software breakpoint management
-    bool has_breakpoint(uint32_t addr) const;
-    void add_breakpoint(uint32_t addr);
-    void remove_breakpoint(uint32_t addr);
-    uint32_t get_original_instruction(uint32_t addr) const;
+    bool has_breakpoint(uint64_t addr) const;
+    void add_breakpoint(uint64_t addr);
+    void remove_breakpoint(uint64_t addr);
+    uint32_t get_original_instruction(uint64_t addr) const;
     
     // Notification from emulator when program completes
     void notify_program_completed(uint32_t final_pc);
@@ -241,7 +241,7 @@ private:
     bool is_halted_;
     
     // Software breakpoint storage: address -> original instruction
-    std::map<uint32_t, uint32_t> software_breakpoints_;
+    std::map<uint64_t, uint32_t> software_breakpoints_;
 
     static constexpr unsigned datacount = 1;
     uint32_t dmdata[datacount];
@@ -265,7 +265,8 @@ private:
     
     // Temporary storage for Access Memory command address
     // OpenOCD sets address in DATA0, then data, then executes command
-    uint32_t access_mem_addr;
+    // For 64-bit addresses, GDB may use DATA2/DATA1 or DATA1/DATA0
+    uint64_t access_mem_addr;
     bool access_mem_addr_valid;
 
 
@@ -285,8 +286,8 @@ private:
     void write_mem(uint64_t addr, uint32_t val);
     
     // Program memory access (via emulator)
-    uint32_t read_program_memory(uint32_t addr) const;
-    void write_program_memory(uint32_t addr, uint32_t value);
+    uint32_t read_program_memory(uint64_t addr) const;
+    void write_program_memory(uint64_t addr, uint32_t value);
 
 
     uint32_t read_dmcontrol();

@@ -26,6 +26,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <cstring>
+
+// Debug mode support
+#include "emulator.h"
+#include "debug_module.h"
+#include "jtag_dtm.h"
+#include "remote_bitbang.h"
+#include <simobject.h>
 
 #include <VX_config.h>
 #ifdef VM_ENABLE
@@ -49,13 +57,21 @@ using namespace vortex;
 class vx_device {
 public:
   vx_device()
-      : arch_(NUM_THREADS, NUM_WARPS, NUM_CORES), ram_(0, MEM_PAGE_SIZE), processor_(arch_), global_mem_(ALLOC_BASE_ADDR, GLOBAL_MEM_SIZE - ALLOC_BASE_ADDR, MEM_PAGE_SIZE, CACHE_BLOCK_SIZE) {
+      : arch_(NUM_THREADS, NUM_WARPS, NUM_CORES), ram_(0, MEM_PAGE_SIZE), processor_(arch_), global_mem_(ALLOC_BASE_ADDR, GLOBAL_MEM_SIZE - ALLOC_BASE_ADDR, MEM_PAGE_SIZE, CACHE_BLOCK_SIZE), debug_mode_(false), debug_module_(nullptr), jtag_dtm_(nullptr), rbb_server_(nullptr) {
     // attach memory module
     processor_.attach_ram(&ram_);
 #ifdef VM_ENABLE
     std::cout << "*** VM ENABLED!! ***" << std::endl;
     CHECK_ERR(init_VM(), );
 #endif
+    // Check for debug mode from environment variable
+    const char* debug_mode_env = getenv("VORTEX_DEBUG_MODE");
+    if (debug_mode_env != nullptr && strcmp(debug_mode_env, "1") == 0) {
+      debug_mode_ = true;
+      const char* debug_port_env = getenv("VORTEX_DEBUG_PORT");
+      debug_port_ = (debug_port_env != nullptr) ? static_cast<uint16_t>(atoi(debug_port_env)) : 9823;
+      std::cout << "[DEBUG] Debug mode enabled on port " << debug_port_ << std::endl;
+    }
   }
 
   ~vx_device() {
@@ -68,6 +84,12 @@ public:
 #endif
     if (future_.valid()) {
       future_.wait();
+    }
+    // Clean up debug mode resources
+    if (debug_mode_) {
+      delete rbb_server_;
+      delete jtag_dtm_;
+      delete debug_module_;
     }
   }
 
@@ -323,8 +345,100 @@ public:
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG0, args_addr & 0xffffffff);
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG1, args_addr >> 32);
 
-    // start new run
-    future_ = std::async(std::launch::async, [&] { processor_.run(); });
+    if (debug_mode_) {
+      // Debug mode: set up debug module and RBB server
+      std::cout << "[DEBUG] Starting debug mode with ACL disabled on port " << debug_port_ << std::endl;
+
+      ram_.enable_acl(false);
+      
+      // Clean up existing debug objects if any
+      if (rbb_server_ != nullptr) {
+        delete rbb_server_;
+        rbb_server_ = nullptr;
+      }
+      if (jtag_dtm_ != nullptr) {
+        delete jtag_dtm_;
+        jtag_dtm_ = nullptr;
+      }
+      if (debug_module_ != nullptr) {
+        delete debug_module_;
+        debug_module_ = nullptr;
+      }
+      
+      // Enable verbose logging for debug module
+      DebugModule::set_verbose_logging(true);
+      
+      // Get emulator from processor
+      Emulator* emulator = processor_.get_first_emulator();
+      
+      // Reset emulator to read startup address from DCRs and initialize PC
+      if (emulator != nullptr) {
+        std::cout << "[DEBUG] Resetting emulator to initialize PC from DCRs..." << std::endl;
+        emulator->reset();
+        auto& warp0 = emulator->get_warp(0);
+        std::cout << "[DEBUG] Emulator reset complete. PC = 0x" << std::hex << warp0.PC << std::dec << std::endl;
+      }
+      
+      // Create debug module with emulator reference
+      debug_module_ = new DebugModule(emulator);
+      
+      // Set debug module in emulator so it can check flags
+      if (emulator != nullptr) {
+        emulator->set_debug_module(debug_module_);
+      }
+      
+      // Halt the program at startup so debugger can control execution
+      debug_module_->set_debug_mode_enabled(true);
+      if (emulator != nullptr) {
+        // Update DPC with initial PC value before halting
+        auto& warp0 = emulator->get_warp(0);
+        uint32_t initial_pc = static_cast<uint32_t>(warp0.PC);
+        debug_module_->direct_write_register(0x7B1, initial_pc);  // Set DPC to initial PC
+      }
+      // Halt the hart (cause 3 = haltreq)
+      debug_module_->halt_hart(3);
+      
+      // Initialize and reset simulation platform
+      SimPlatform::instance().initialize();
+      SimPlatform::instance().reset();
+      
+      // Create JTAG DTM
+      jtag_dtm_ = new jtag_dtm_t(debug_module_);
+      
+      // Create remote bitbang server
+      rbb_server_ = new remote_bitbang_t(debug_port_, jtag_dtm_);
+      
+      std::cout << "[DEBUG] Remote bitbang server ready. Waiting for OpenOCD connection..." << std::endl;
+      
+      // Start debug loop in async thread
+      future_ = std::async(std::launch::async, [this] {
+        // Debug loop: advance simulation and handle JTAG communication
+        Emulator* emulator = processor_.get_first_emulator();
+        while (true) {
+          // Advance simulation by one cycle
+          SimPlatform::instance().tick();
+          // Handle JTAG/debugger communication
+          rbb_server_->tick();
+          
+          // Check if program has completed (all warps inactive)
+          // Exit the loop when done, similar to how processor.run() exits
+          // This makes future_ ready so ready_wait() can return
+          if (emulator != nullptr && !emulator->running()) {
+            // Program completed - notify debug module and halt
+            if (debug_module_ != nullptr) {
+              auto& warp0 = emulator->get_warp(0);
+              uint32_t final_pc = static_cast<uint32_t>(warp0.PC);
+              debug_module_->notify_program_completed(final_pc);
+            }
+            // Exit the debug loop to allow runtime to continue
+            break;
+          }
+        }
+      });
+    } else {
+      // Normal mode: start new run
+      future_ = std::async(std::launch::async, [&] { processor_.run(); });
+    }
 
     // clear mpm cache
     mpm_cache_.clear();
@@ -618,6 +732,12 @@ private:
   MemoryAllocator *page_table_mem_;
   MemoryAllocator *virtual_mem_;
 #endif
+  // Debug mode support
+  bool debug_mode_;
+  uint16_t debug_port_;
+  DebugModule* debug_module_;
+  jtag_dtm_t* jtag_dtm_;
+  remote_bitbang_t* rbb_server_;
 };
 
 #include <callbacks.inc>
