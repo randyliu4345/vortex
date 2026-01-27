@@ -6,6 +6,7 @@
 #include <set>
 #include <map>
 #include <array>
+#include "types.h"
 
 namespace vortex {
     class Emulator;
@@ -127,7 +128,6 @@ public:
     static bool verbose_logging();
 
 
-    uint32_t direct_read_register(uint16_t regaddr);
     void direct_write_register(uint16_t regaddr, uint32_t value);
     bool read_memory_block(uint64_t addr, uint8_t* dest, size_t len) const;
     bool write_memory_block(uint64_t addr, const uint8_t* src, size_t len);
@@ -279,7 +279,9 @@ private:
     void execute_command(uint32_t cmd);
 
 
-    uint32_t read_register(uint16_t regaddr);
+    // Read register value - returns full register value using reg_data_t naturally
+    // Handles both 32-bit and 64-bit registers
+    vortex::reg_data_t read_register(uint16_t regaddr);
     void write_register(uint16_t regaddr, uint32_t val);
 
 

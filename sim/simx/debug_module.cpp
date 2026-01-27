@@ -545,41 +545,18 @@ void DebugModule::execute_command(uint32_t value)
             if (write) {
                 write_register(regaddr, data0());
             } else {
-                data0() = read_register(regaddr);
+                vortex::reg_data_t reg_data = read_register(regaddr);
                 if (aarsize == 3) {
-                    // 64-bit read - return upper 32 bits in DATA1
-                    if (emulator_ != nullptr) {
+                    // 64-bit read: split into DATA0 (lower) and DATA1 (upper)
+                    data0() = reg_data.u32;
 #if (XLEN == 64)
-                        auto& warp0 = emulator_->get_warp(0);
-                        unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
-                        if (regaddr == 0x1020) {
-                            // PC (0x1020): return upper 32 bits of the 64-bit PC
-                            data1 = static_cast<uint32_t>(warp0.PC >> 32);
-                        } else if (regaddr == 0x07b1 || regaddr == 0x7B1) {
-                            // DPC (0x7B1): DPC is 32-bit, but return upper 32 bits of actual PC
-                            // so GDB can reconstruct the full 64-bit address
-                            data1 = static_cast<uint32_t>(warp0.PC >> 32);
-                        } else if (regaddr >= 0x1000 && regaddr <= 0x101F) {
-                            // GPR (0x1000-0x101F): return upper 32 bits for XLEN=64
-                            int gpr_index = regaddr - 0x1000;
-                            vortex::reg_data_t reg_data;
-                            reg_data.u = warp0.ireg_file.at(gpr_index).at(thread_id);
-                            // Extract upper 32 bits for XLEN=64
-                            data1 = static_cast<uint32_t>(reg_data.u >> 32);
-                        } else {
-                            // For other registers, upper 32 bits are 0
-                            data1 = 0;
-                        }
+                    data1 = static_cast<uint32_t>(reg_data.u >> 32);
 #else
-                        // For XLEN=32, all upper 32 bits are 0
-                        data1 = 0;
+                    data1 = 0;  // XLEN=32: upper 32 bits are always 0
 #endif
-                    } else {
-                        // No emulator available, upper 32 bits are 0
-                        data1 = 0;
-                    }
                 } else {
-                    // 32-bit read - clear DATA1 to prevent corruption
+                    // 32-bit read: use lower 32 bits and clear DATA1
+                    data0() = reg_data.u32;
                     data1 = 0;
                 }
             }
@@ -825,107 +802,103 @@ void DebugModule::execute_command(uint32_t value)
 }
 
 // Reads a hart register by abstract register address (used by access register commands).
+// Returns full register value using reg_data_t naturally.
 // Use case: Called during abstract command execution to read GPRs, PC, DCSR, DPC, or CSRs.
-// Register address mapping: 0x1000-0x101F (GPRs), 0x1020 (PC), 0x7B0 (DCSR), 0x7B1 (DPC), 0x0000-0x0FFF/0xC000-0xFFFF (CSRs).
-uint32_t DebugModule::read_register(uint16_t regaddr)
+// Register address mapping: 0x1000-0x101F (GPRs), 0x1020 (PC), 0x1021-0x1040 (FPRs f0-f31), 0x7B0 (DCSR), 0x7B1 (DPC), 0x0000-0x0FFF/0xC000-0xFFFF (CSRs).
+vortex::reg_data_t DebugModule::read_register(uint16_t regaddr)
 {
     unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
+    vortex::reg_data_t reg_data = {};
     
-    // General purpose registers (x0–x31) at addresses 0x1000–0x101F
-    if (regaddr >= 0x1000 && regaddr <= 0x101F) {
-        int gpr_index = regaddr - 0x1000;
-        uint32_t value;
-        if (emulator_ != nullptr) {
-            // Use emulator's warp 0, selected thread register
-            auto& warp0 = emulator_->get_warp(0);
-            vortex::reg_data_t reg_data;
+    // Emulator registers (GPRs, FPRs, PC) - use reg_data_t naturally
+    if (emulator_ != nullptr) {
+        auto& warp0 = emulator_->get_warp(0);
+        
+        // General purpose registers (x0–x31) at addresses 0x1000–0x101F
+        if (regaddr >= 0x1000 && regaddr <= 0x101F) {
+            int gpr_index = regaddr - 0x1000;
             reg_data.u = warp0.ireg_file.at(gpr_index).at(thread_id);
-            // Extract lower 32 bits for Debug Spec compatibility (returns uint32_t)
-            value = static_cast<uint32_t>(reg_data.u);
-        } else {
-            // No emulator available
-            value = 0;
+            if (thread_id != 0) {
+                dm_log("[DM] READ REG  x%d (0x%04x) thread=%u -> 0x%016lx\n", gpr_index, regaddr, thread_id, reg_data.u);
+            }
+            return reg_data;
         }
-        // Only log non-zero threads to reduce verbosity
-        if (thread_id != 0) {
-            dm_log("[DM] READ REG  x%d (0x%04x) thread=%u -> 0x%08x\n", gpr_index, regaddr, thread_id, value);
+        
+        // PC register (0x1020)
+        if (regaddr == 0x1020) {
+            reg_data.u = warp0.PC;
+            dm_log("[DM] READ REG  pc (0x1020) -> 0x%016lx\n", reg_data.u);
+            return reg_data;
         }
-        return value;
+        
+        // Floating point registers (f0–f31) at addresses 0x1021–0x1040 (RISC-V Debug Spec)
+        if (regaddr >= 0x1021 && regaddr <= 0x1040) {
+            int fpr_index = regaddr - 0x1020; // Set w/ empirical testing, not sure why this works
+            reg_data.u64 = warp0.freg_file.at(fpr_index).at(thread_id);
+            dm_log("[DM] READ REG  f%d (0x%04x) thread=%u -> 0x%016lx\n", fpr_index, regaddr, thread_id, reg_data.u64);
+            return reg_data;
+        }
+        
+        // DPC (0x7B1): return actual PC for 64-bit reconstruction
+        if (regaddr == 0x07b1 || regaddr == 0x7B1) {
+            reg_data.u = warp0.PC;  // Return actual PC, not dpc_ (which is 32-bit)
+            return reg_data;
+        }
     }
-
-    if (regaddr == 0x1020) {
-        uint32_t value;
-        if (emulator_ != nullptr) {
-            // Use emulator's warp 0 PC
-            auto& warp0 = emulator_->get_warp(0);
-            value = static_cast<uint32_t>(warp0.PC);
-        } else {
-            // No emulator available
-            value = 0;
-        }
-        dm_log("[DM] READ REG  pc (0x1020) -> 0x%08x\n", value);
-        return value;
-    }
-
+    
+    // DCSR (0x7B0): 32-bit register
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        // Read DCSR for the selected thread
-        unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
-        uint32_t value = dcsr_[thread_id].to_u32();
+        reg_data.u32 = dcsr_[thread_id].to_u32();
         if (thread_id != 0) {
-            dm_log("[DM] READ REG  dcsr (0x7B0) thread=%u -> 0x%08x\n", thread_id, value);
+            dm_log("[DM] READ REG  dcsr (0x7B0) thread=%u -> 0x%08x\n", thread_id, reg_data.u32);
         }
-        return value;
+        return reg_data;
     }
-
+    
+    // DPC (0x7B1): 32-bit register (handled above if emulator available)
     if (regaddr == 0x07b1 || regaddr == 0x7B1) {
-        uint32_t value = dpc_;
-        dm_log("[DM] READ REG  dpc (0x7B1) -> 0x%08x\n", value);
-        return value;
+        reg_data.u32 = dpc_;
+        dm_log("[DM] READ REG  dpc (0x7B1) -> 0x%08x\n", reg_data.u32);
+        return reg_data;
     }
-
+    
+    // CSRs: 32-bit registers
     if (regaddr <= 0x0FFF) {
         uint16_t csr_num = regaddr;
-
         if (csr_num == 0x0301) {
-            // Calculate MISA based on configured extensions
-            uint32_t value = ((vortex::log2floor(XLEN) - 4) << 30) | MISA_STD;
+            reg_data.u32 = ((vortex::log2floor(XLEN) - 4) << 30) | MISA_STD;
             dm_log("[DM] READ REG  misa (0x0301) -> 0x%08x (RV%dIMAFD%s)\n", 
-                   value, XLEN, (EXT_A_ENABLED ? "A" : ""));
-            return value;
+                   reg_data.u32, XLEN, (EXT_A_ENABLED ? "A" : ""));
+            return reg_data;
         }
-
         if (csr_num == 0x0c22) {
-            uint32_t value = 0;
-            dm_log("[DM] READ REG  vlenb (0x0c22) -> 0x%08x (no vector support)\n", value);
-            return value;
+            reg_data.u32 = 0;
+            dm_log("[DM] READ REG  vlenb (0x0c22) -> 0x%08x (no vector support)\n", reg_data.u32);
+            return reg_data;
         }
         dm_log("[DM] READ REG  csr[0x%03x] (0x%04x) -> 0x00000000\n", csr_num, regaddr);
-        return 0;
+        return reg_data;
     }
-
+    
     if (regaddr >= 0xC000) {
         uint16_t csr_num = regaddr - 0xC000;
-
         if (csr_num == 0x0301) {
-            // Calculate MISA based on configured extensions
-            uint32_t value = ((vortex::log2floor(XLEN) - 4) << 30) | MISA_STD;
+            reg_data.u32 = ((vortex::log2floor(XLEN) - 4) << 30) | MISA_STD;
             dm_log("[DM] READ REG  misa (0x%04x) -> 0x%08x (RV%dIMAFD%s)\n", 
-                   regaddr, value, XLEN, (EXT_A_ENABLED ? "A" : ""));
-            return value;
+                   regaddr, reg_data.u32, XLEN, (EXT_A_ENABLED ? "A" : ""));
+            return reg_data;
         }
-
         if (csr_num == 0x0c22) {
-            uint32_t value = 0;
-            dm_log("[DM] READ REG  vlenb (0x%04x) -> 0x%08x (no vector support)\n", regaddr, value);
-            return value;
+            reg_data.u32 = 0;
+            dm_log("[DM] READ REG  vlenb (0x%04x) -> 0x%08x (no vector support)\n", regaddr, reg_data.u32);
+            return reg_data;
         }
-
         dm_log("[DM] READ REG  csr[0x%03x] (0x%04x) -> 0x00000000\n", csr_num, regaddr);
-        return 0;
+        return reg_data;
     }
-
+    
     dm_log("[DM] READ REG unknown regaddr=0x%04x -> 0x00000000\n", regaddr);
-    return 0;
+    return reg_data;
 }
 
 void DebugModule::write_register(uint16_t regaddr, uint32_t val)
@@ -959,6 +932,20 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
             warp0.PC = val;
         }
         dm_log("[DM] WRITE REG pc (0x1020) <- 0x%08x\n", val);
+        return;
+    }
+
+    // Floating point registers (f0–f31) at addresses 0x1021–0x1040 (RISC-V Debug Spec)
+    if (regaddr >= 0x102a && regaddr <= 0x1040) {
+        int fpr_index = regaddr - 0x1020; // Set w/ empirical testing, not sure why this works
+        if (emulator_ != nullptr) {
+            auto& warp0 = emulator_->get_warp(0);
+            // For 32-bit write, preserve upper 32 bits of existing value
+            uint64_t old_value = warp0.freg_file.at(fpr_index).at(thread_id);
+            uint64_t new_value = (old_value & 0xFFFFFFFF00000000ULL) | static_cast<uint64_t>(val);
+            warp0.freg_file.at(fpr_index).at(thread_id) = new_value;
+        }
+        dm_log("[DM] WRITE REG f%d (0x%04x) thread=%u <- 0x%08x\n", fpr_index, regaddr, thread_id, val);
         return;
     }
 
@@ -1019,10 +1006,6 @@ void DebugModule::write_program_memory(uint64_t addr, uint32_t value)
     emulator_->dcache_write(&value, addr, sizeof(uint32_t));
 }
 
-uint32_t DebugModule::direct_read_register(uint16_t regaddr)
-{
-    return read_register(regaddr);
-}
 
 void DebugModule::direct_write_register(uint16_t regaddr, uint32_t value)
 {
