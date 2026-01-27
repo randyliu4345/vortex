@@ -530,6 +530,17 @@ void DebugModule::execute_command(uint32_t value)
         dm_log("[DM] EXECUTE COMMAND: Access Register, regaddr=0x%04x, write=%d, transfer=%d, postexec=%d, aarsize=%d\n",
                regaddr, write ? 1 : 0, transfer ? 1 : 0, postexec ? 1 : 0, aarsize);
 
+        // Check aarsize compatibility with XLEN
+        // aarsize: 2 = 32-bit, 3 = 64-bit, 4 = 128-bit
+        // OpenOCD detects XLEN by trying a 64-bit read and checking if it fails
+#if (XLEN == 32)
+        if (aarsize == 3) {
+            // 64-bit access not supported on XLEN=32
+            abstractcs.cmderr = 2;  // NOT SUPPORTED
+            dm_log("[DM] COMMAND error: 64-bit access (aarsize=3) not supported on XLEN=32 (cmderr=2)\n");
+            return;
+        }
+#endif
         if (transfer) {
             if (write) {
                 write_register(regaddr, data0());
@@ -538,7 +549,9 @@ void DebugModule::execute_command(uint32_t value)
                 if (aarsize == 3) {
                     // 64-bit read - return upper 32 bits in DATA1
                     if (emulator_ != nullptr) {
+#if (XLEN == 64)
                         auto& warp0 = emulator_->get_warp(0);
+                        unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
                         if (regaddr == 0x1020) {
                             // PC (0x1020): return upper 32 bits of the 64-bit PC
                             data1 = static_cast<uint32_t>(warp0.PC >> 32);
@@ -546,10 +559,21 @@ void DebugModule::execute_command(uint32_t value)
                             // DPC (0x7B1): DPC is 32-bit, but return upper 32 bits of actual PC
                             // so GDB can reconstruct the full 64-bit address
                             data1 = static_cast<uint32_t>(warp0.PC >> 32);
+                        } else if (regaddr >= 0x1000 && regaddr <= 0x101F) {
+                            // GPR (0x1000-0x101F): return upper 32 bits for XLEN=64
+                            int gpr_index = regaddr - 0x1000;
+                            vortex::reg_data_t reg_data;
+                            reg_data.u = warp0.ireg_file.at(gpr_index).at(thread_id);
+                            // Extract upper 32 bits for XLEN=64
+                            data1 = static_cast<uint32_t>(reg_data.u >> 32);
                         } else {
                             // For other registers, upper 32 bits are 0
                             data1 = 0;
                         }
+#else
+                        // For XLEN=32, all upper 32 bits are 0
+                        data1 = 0;
+#endif
                     } else {
                         // No emulator available, upper 32 bits are 0
                         data1 = 0;
@@ -630,61 +654,54 @@ void DebugModule::execute_command(uint32_t value)
             use_64bit_addr_space = false;
         }
 
-        // If post-increment is set and we have a previous address, use it
-        // (DATA registers may contain data from previous read, not address components)
+        // Address translation for Access Memory commands
+        // For XLEN=32: Address is in DATA1, DATA0 is data (never part of address)
+        // For XLEN=64: More complex - may need to construct 64-bit address from multiple registers
+
+#if (XLEN == 32)
+        // XLEN=32: Simple address resolution
+        // Priority: post-increment > DATA1 > fallback
         if (aampostincrement && access_mem_addr_valid) {
             mem_addr = access_mem_addr;
             addr_src = ADDR_PREV;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 1 (post-increment) -> 0x%016lx\n", mem_addr);
-        } else if (data2 != 0 && data2 >= 0x80000000 && use_64bit_addr_space) {
-            // HACK: If DATA2 >= 0x80000000 AND we're in 64-bit address space (PC >= 0x100000000),
-            //       assume it's the lower 32 bits of a 64-bit address with upper 32 bits = 0x1
-            //       (i.e., 0x180000000 + DATA2)
-            //       This fixes breakpoints being set at wrong addresses for kernels using 64-bit addresses.
-            //       GDB sends 0x800000a8, we translate to 0x18000000a8
-            //       BUT: For kernels using 32-bit addresses (PC < 0x100000000), we DON'T translate
-            //       This applies to both reads and writes (fixed: previously only worked for reads)
-            // Ignore DATA1 even if non-zero, as it likely contains data from a previous read
-            mem_addr = ((uint64_t)0x1 << 32) | (uint64_t)data2;
-            addr_src = ADDR_DATA2;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 2 (DATA2>=0x80000000, 64-bit space) DATA2=0x%08x -> 0x%016lx\n", data2, mem_addr);
-        } else if (data2 != 0 && data2 >= 0x80000000) {
-            // DATA2 >= 0x80000000 but we're in 32-bit address space - use as-is (no translation)
-            mem_addr = data2;
-            addr_src = ADDR_DATA2;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 2b (DATA2>=0x80000000, 32-bit space) DATA2=0x%08x -> 0x%016lx\n", data2, mem_addr);
-        } else if (data2 != 0 && data1 != 0 && data2 < 0x80000000) {
-            // Only construct 64-bit address from DATA2/DATA1 if DATA2 < 0x80000000
-            // (DATA2 (upper 32 bits) and DATA1 (lower 32 bits))
-            mem_addr = ((uint64_t)data2 << 32) | (uint64_t)data1;
-            addr_src = ADDR_DATA2;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 3 (DATA2|DATA1 64-bit) DATA2=0x%08x DATA1=0x%08x -> 0x%016lx\n", data2, data1, mem_addr);
-        } else if (data2 != 0) {
-            mem_addr = data2;
-            addr_src = ADDR_DATA2;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 4 (DATA2 only) DATA2=0x%08x -> 0x%016lx\n", data2, mem_addr);
-        } else if (data1 != 0 && !write && data0() > 0x7FFFFFFF) {
-            // For reads: 64-bit address with DATA1 (upper) and DATA0 (lower)
-            mem_addr = ((uint64_t)data1 << 32) | (uint64_t)data0();
-            addr_src = ADDR_DATA1;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 5 (DATA1|DATA0 64-bit read) DATA1=0x%08x DATA0=0x%08x -> 0x%016lx\n", data1, data0(), mem_addr);
+            dm_log("[DM] ADDR_TRANSLATE (32-bit): post-increment -> 0x%08lx\n", mem_addr);
         } else if (data1 != 0) {
             mem_addr = data1;
             addr_src = ADDR_DATA1;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 6 (DATA1 only) DATA1=0x%08x -> 0x%016lx\n", data1, mem_addr);
-        } else if (data0() != 0) {
-            mem_addr = data0();
-            addr_src = ADDR_DATA0;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 7 (DATA0 only) DATA0=0x%08x -> 0x%016lx\n", data0(), mem_addr);
+            dm_log("[DM] ADDR_TRANSLATE (32-bit): DATA1=0x%08x -> 0x%08lx\n", data1, mem_addr);
         } else if (access_mem_addr_valid) {
             mem_addr = access_mem_addr;
             addr_src = ADDR_PREV;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 8 (previous address) -> 0x%016lx\n", mem_addr);
+            dm_log("[DM] ADDR_TRANSLATE (32-bit): previous -> 0x%08lx\n", mem_addr);
         } else {
             mem_addr = 0;
             addr_src = ADDR_NONE;
-            dm_log("[DM] ADDR_TRANSLATE: Branch 9 (NONE/fallback) -> 0x%016lx\n", mem_addr);
+            dm_log("[DM] ADDR_TRANSLATE (32-bit): fallback -> 0x%08lx\n", mem_addr);
         }
+#else
+        // XLEN=64: Address resolution for 64-bit address space
+        if (aampostincrement && access_mem_addr_valid) {
+            mem_addr = access_mem_addr;
+            addr_src = ADDR_PREV;
+            dm_log("[DM] ADDR_TRANSLATE (64-bit): post-increment -> 0x%016lx\n", mem_addr);
+        } else if (data2 != 0 && data2 >= 0x80000000 && use_64bit_addr_space) {
+            // HACK: DATA2 >= 0x80000000 in 64-bit space -> assume upper 32 bits = 0x1
+            // OpenOCD sends 0x80000xxx for address 0x180000xxx
+            mem_addr = ((uint64_t)0x1 << 32) | (uint64_t)data2;
+            addr_src = ADDR_DATA2;
+            dm_log("[DM] ADDR_TRANSLATE (64-bit): DATA2>=0x80000000 -> 0x%016lx\n", mem_addr);
+        } else if (data2 != 0) {
+            // Low address (< 0x80000000) or not in 64-bit address space
+            mem_addr = data2;
+            addr_src = ADDR_DATA2;
+            dm_log("[DM] ADDR_TRANSLATE (64-bit): DATA2 only -> 0x%016lx\n", mem_addr);
+        } else {
+            // Fallback: no address provided
+            mem_addr = 0;
+            addr_src = ADDR_NONE;
+            dm_log("[DM] ADDR_TRANSLATE (64-bit): fallback -> 0x%016lx\n", mem_addr);
+        }
+#endif
 
         // Always perform one memory access per command.
             if (write) {
@@ -821,7 +838,10 @@ uint32_t DebugModule::read_register(uint16_t regaddr)
         if (emulator_ != nullptr) {
             // Use emulator's warp 0, selected thread register
             auto& warp0 = emulator_->get_warp(0);
-            value = static_cast<uint32_t>(warp0.ireg_file.at(gpr_index).at(thread_id));
+            vortex::reg_data_t reg_data;
+            reg_data.u = warp0.ireg_file.at(gpr_index).at(thread_id);
+            // Extract lower 32 bits for Debug Spec compatibility (returns uint32_t)
+            value = static_cast<uint32_t>(reg_data.u);
         } else {
             // No emulator available
             value = 0;
@@ -921,7 +941,9 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
         }
         if (emulator_ != nullptr) {
             auto& warp0 = emulator_->get_warp(0);
-            warp0.ireg_file.at(gpr_index).at(thread_id) = val;
+            vortex::reg_data_t reg_data;
+            reg_data.u = static_cast<vortex::Word>(val);  // Zero-extend for XLEN=64
+            warp0.ireg_file.at(gpr_index).at(thread_id) = reg_data.u;
         }
         // Only log non-zero threads to reduce verbosity
         if (thread_id != 0) {
