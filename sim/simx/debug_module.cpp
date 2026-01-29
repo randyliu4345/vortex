@@ -62,10 +62,8 @@ void DebugModule::reset()
     dmstatus = dmstatus_t();
     abstractcs = abstractcs_t();
 
-    // Initialize debug state for all threads
-    for (unsigned i = 0; i < 32; i++) {
-        dcsr_[i] = DCSR();
-    }
+    // Initialize debug state
+    dcsr_ = DCSR();
     dpc_ = 0;
     resumeack_ = false;
     havereset_ = false;
@@ -615,22 +613,6 @@ void DebugModule::execute_command(uint32_t value)
 
         uint64_t mem_addr = 0;
 
-        // Determine if we're in 64-bit address space by checking PC/DPC
-        // If PC >= 0x100000000, we're in 64-bit space and addresses >= 0x80000000 need translation
-        // If PC < 0x100000000, we're in 32-bit space and addresses should be used as-is
-        // This fixes the issue where kernels using 32-bit addresses (0x80000000) were incorrectly
-        // translated to 64-bit addresses (0x180000000), causing wrong memory access.
-        bool use_64bit_addr_space = false;
-        if (emulator_ != nullptr) {
-            auto& warp0 = emulator_->get_warp(0);
-            uint64_t pc = warp0.PC;
-            use_64bit_addr_space = (pc >= 0x100000000ULL);
-        } else {
-            // Fallback: DPC is 32-bit, so if emulator not available, assume 32-bit space (no translation)
-            // This is safe because DPC < 0x100000000 by definition (it's uint32_t)
-            use_64bit_addr_space = false;
-        }
-
         // Address translation for Access Memory commands
         // For XLEN=32: Address is in DATA1, DATA0 is data (never part of address)
         // For XLEN=64: More complex - may need to construct 64-bit address from multiple registers
@@ -656,6 +638,22 @@ void DebugModule::execute_command(uint32_t value)
             dm_log("[DM] ADDR_TRANSLATE (32-bit): fallback -> 0x%08lx\n", mem_addr);
         }
 #else
+        // Determine if we're in 64-bit address space by checking PC/DPC
+        // If PC >= 0x100000000, we're in 64-bit space and addresses >= 0x80000000 need translation
+        // If PC < 0x100000000, we're in 32-bit space and addresses should be used as-is
+        // This fixes the issue where kernels using 32-bit addresses (0x80000000) were incorrectly
+        // translated to 64-bit addresses (0x180000000), causing wrong memory access.
+        bool use_64bit_addr_space = false;
+        if (emulator_ != nullptr) {
+            auto& warp0 = emulator_->get_warp(0);
+            uint64_t pc = warp0.PC;
+            use_64bit_addr_space = (pc >= 0x100000000ULL);
+        } else {
+            // Fallback: DPC is 32-bit, so if emulator not available, assume 32-bit space (no translation)
+            // This is safe because DPC < 0x100000000 by definition (it's uint32_t)
+            use_64bit_addr_space = false;
+        }
+        
         // XLEN=64: Address resolution for 64-bit address space
         if (aampostincrement && access_mem_addr_valid) {
             mem_addr = access_mem_addr;
@@ -848,7 +846,7 @@ vortex::reg_data_t DebugModule::read_register(uint16_t regaddr)
     
     // DCSR (0x7B0): 32-bit register
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        reg_data.u32 = dcsr_[thread_id].to_u32();
+        reg_data.u32 = dcsr_.to_u32();
         if (thread_id != 0) {
             dm_log("[DM] READ REG  dcsr (0x7B0) thread=%u -> 0x%08x\n", thread_id, reg_data.u32);
         }
@@ -950,9 +948,11 @@ void DebugModule::write_register(uint16_t regaddr, uint32_t val)
     }
 
     if (regaddr == 0x07b0 || regaddr == 0x7B0) {
-        // Write DCSR for the selected thread
+        // Write DCSR (shared across all threads)
         unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
-        dcsr_[thread_id].from_u32(val);
+        dcsr_.from_u32(val);
+        // Keep single_step_active_ in sync with dcsr_.step
+        single_step_active_ = (dcsr_.step != 0);
         if (thread_id != 0) {
             dm_log("[DM] WRITE REG dcsr (0x7B0) thread=%u <- 0x%08x\n", thread_id, val);
         }
@@ -1039,15 +1039,13 @@ void DebugModule::halt_hart(uint8_t cause)
     dm_log("[DM] Halt requested - hart halted (cause=%u)\n", cause);
     // Enter debug mode: update DCSR for all threads
     // In SIMT model, all threads halt together, so set cause for all
-    for (unsigned i = 0; i < NUM_THREADS; i++) {
-        dcsr_[i].cause = cause & 0xF;
-    }
+    dcsr_.cause = cause & 0xF;
     is_halted_ = true;
     // Set halt flag so emulator will stop execution and update DPC
     set_halt_requested(true);
     update_dmstatus();
-    // Log DCSR value after setting cause to verify encoding (hart 0 only)
-    uint32_t dcsr_val = dcsr_[0].to_u32();
+    // Log DCSR value after setting cause to verify encoding
+    uint32_t dcsr_val = dcsr_.to_u32();
     uint8_t cause_field = (dcsr_val >> 8) & 0xF;
     dm_log("[DM] DCSR after halt: 0x%08x, cause field: 0x%x (should be 0x%x)\n", dcsr_val, cause_field, cause);
 }
@@ -1068,7 +1066,7 @@ void DebugModule::resume_hart(bool single_step)
         dm_log("[DM] Resume state: PC=0x%016lx, DPC=0x%08x, halt_requested=%d\n", 
                current_pc, dpc, halt_requested_ ? 1 : 0);
         
-        if (dcsr_[0].cause == 1) {
+        if (dcsr_.cause == 1) {
             uint64_t bp_addr = dpc_;
             if (bp_addr == 0) {
                 bp_addr = current_pc;
@@ -1078,15 +1076,15 @@ void DebugModule::resume_hart(bool single_step)
                 bp_addr = (current_pc & 0xFFFFFFFF00000000ULL) | bp_addr;
             }
             
-            if (has_breakpoint(bp_addr)) {
-                dm_log("[DM] Removing breakpoint at 0x%016lx before resuming from EBREAK\n", bp_addr);
-                remove_breakpoint(bp_addr);
-            }
         }
     }
 
 
-    bool do_step = single_step || dcsr_[0].step;  // Use hart 0's step flag (shared in SIMT)
+    // Check if step flag is set (single DCSR shared across all threads)
+    unsigned thread_id = (dmcontrol.hartsel < NUM_THREADS) ? dmcontrol.hartsel : 0;
+    bool do_step = single_step || dcsr_.step;
+    dm_log("[DM] Resume check: thread_id=%u, single_step=%d, dcsr_.step=%d, do_step=%d\n", 
+           thread_id, single_step ? 1 : 0, dcsr_.step ? 1 : 0, do_step ? 1 : 0);
     if (do_step) {
         // Set single-step flag so emulator will execute one instruction then halt
         set_single_step_active(true);
@@ -1097,7 +1095,7 @@ void DebugModule::resume_hart(bool single_step)
     } else {
         // Clear halt flag to allow continuous execution
         set_halt_requested(false);
-        set_single_step_active(false);
+        set_single_step_active(false);  // This also clears dcsr_.step
         // No need to resume - just clearing halt_requested_ is enough
         dm_log("[DM] Continuous execution resumed: halt_requested=%d, single_step_active=%d\n", 
                halt_requested_ ? 1 : 0, single_step_active_ ? 1 : 0);
@@ -1134,6 +1132,7 @@ void DebugModule::set_halt_requested(bool halt)
 void DebugModule::set_single_step_active(bool step)
 {
     single_step_active_ = step;
+    dcsr_.step = step ? 1 : 0;  // Keep DCSR step bit in sync
 }
 
 void DebugModule::set_debug_mode_enabled(bool enabled)
@@ -1151,6 +1150,7 @@ void DebugModule::add_breakpoint(uint64_t addr)
     if (has_breakpoint(addr)) {
         return; // Already has breakpoint
     }
+    dm_log("[DM] Adding breakpoint at 0x%016lx\n", addr);
     // Read and store the original instruction (should be called before EBREAK is written)
     uint32_t original = read_program_memory(addr);
     software_breakpoints_[addr] = original;
@@ -1162,6 +1162,7 @@ void DebugModule::remove_breakpoint(uint64_t addr)
     if (it == software_breakpoints_.end()) {
         return; // No breakpoint at this address
     }
+    dm_log("[DM] Removing breakpoint at 0x%016lx\n", addr);
     // Restore the original instruction
     write_program_memory(addr, it->second);
     software_breakpoints_.erase(it);
@@ -1188,9 +1189,7 @@ void DebugModule::notify_program_completed(uint32_t final_pc)
         
         is_halted_ = true;
         set_halt_requested(true);
-        for (unsigned i = 0; i < NUM_THREADS; i++) {
-            dcsr_[i].cause = 1;  // Use ebreak cause (generic halt)
-        }
+        dcsr_.cause = 1;  // Use ebreak cause (generic halt)
     }
 }
 

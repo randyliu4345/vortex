@@ -154,7 +154,7 @@ public:
     
     // Debug flag control methods (set flags)
     void set_halt_requested(bool halt);
-    void set_single_step_active(bool step);
+    void set_single_step_active(bool step);  // Sets both single_step_active_ and dcsr_.step
     void set_debug_mode_enabled(bool enabled);
     
     // Software breakpoint management
@@ -230,8 +230,8 @@ private:
         }
     };
     
-    // Per-hart DCSR registers (one for each thread)
-    std::array<DCSR, 32> dcsr_;  // Support up to 32 threads
+    // Single DCSR register (shared across all threads until warps are implemented)
+    DCSR dcsr_;
     
     // Debug Program Counter (DPC) - PC value when entering debug mode
     uint32_t dpc_;
