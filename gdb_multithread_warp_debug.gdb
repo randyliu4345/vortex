@@ -26,7 +26,6 @@ except:
     gdb.execute('set $exec_file = "' + exec_file + '"')
 end
 
-set architecture riscv:rv64
 
 # Connect to single target
 target extended-remote localhost:3333
@@ -43,6 +42,10 @@ DM_DMCONTROL   = 0x10
 DM_DMSTATUS    = 0x11
 DM_ABSTRACTCS  = 0x16
 DM_COMMAND     = 0x17
+DM_NUM_CORES   = 0x1b
+DM_NUM_THREADS = 0x1c
+DM_THREAD_LANE = 0x1d
+DM_WARP_SEL    = 0x1e
 
 # DMCONTROL bit positions
 DMCONTROL_DMACTIVE = 1 << 0
@@ -56,17 +59,17 @@ DCSR_CAUSE_MASK = 0xF
 
 # Configuration: NUM_THREADS per warp (default 4, can be changed)
 NUM_THREADS = 4
-NUM_WARPS = 4
 
 # Current selection state
 _current_thread = 0
 _current_warp = 0
+_current_core = 0
 
 def dmi_read(addr):
     """Read a DMI register and return its value"""
     try:
         result = gdb.execute("monitor riscv dmi_read 0x%x" % addr, to_string=True)
-        match = re.search(r'0x([0-9a-fA-F]{8})', result, re.IGNORECASE)
+        match = re.search(r'0x([0-9a-fA-F]+)', result, re.IGNORECASE)
         if match:
             return int(match.group(1), 16)
     except:
@@ -97,7 +100,7 @@ def write_abstract_register(regaddr, value):
     dmi_write(DM_COMMAND, cmd)
 
 def set_hartsel(hartsel_value):
-    """Set hartsel in dmcontrol register via DMI write"""
+    """Set hartsel in dmcontrol register via DMI write (hartsel maps to core_id)"""
     current_value = dmi_read(DM_DMCONTROL)
     if current_value is None:
         current_value = DMCONTROL_DMACTIVE
@@ -106,25 +109,29 @@ def set_hartsel(hartsel_value):
     current_value &= ~(0x3ff << DMCONTROL_HARTSELHI_SHIFT)
     current_value &= ~(0x3ff << DMCONTROL_HARTSELLO_SHIFT)
     
-    # Set hartselhi to hartsel_value (hartsel = warp_id * NUM_THREADS + thread_id)
+    # Set hartsel (maps to core_id, though only core 0 emulator is currently connected)
     new_value = current_value | (hartsel_value << DMCONTROL_HARTSELHI_SHIFT)
     new_value |= DMCONTROL_DMACTIVE
     
     return dmi_write(DM_DMCONTROL, new_value)
 
+def set_coresel(core_id):
+    """Set core selection via hartsel register (note: only core 0 emulator is currently connected)"""
+    global _current_core
+    _current_core = core_id
+    return set_hartsel(core_id)
+
 def set_threadsel(thread_id):
-    """Set threadsel in dmcontrol register via DMI write
-    Uses current warp: hartsel = _current_warp * NUM_THREADS + thread_id"""
-    global _current_warp
-    hartsel = _current_warp * NUM_THREADS + thread_id
-    return set_hartsel(hartsel)
+    """Set thread lane selection via DM_THREAD_LANE register"""
+    global _current_thread
+    _current_thread = thread_id
+    return dmi_write(DM_THREAD_LANE, thread_id)
 
 def set_warpsel(warp_id):
-    """Set warpsel in dmcontrol register via DMI write
-    Uses current thread: hartsel = warp_id * NUM_THREADS + _current_thread"""
-    global _current_thread
-    hartsel = warp_id * NUM_THREADS + _current_thread
-    return set_hartsel(hartsel)
+    """Set warp selection via DM_WARP_SEL register"""
+    global _current_warp
+    _current_warp = warp_id
+    return dmi_write(DM_WARP_SEL, warp_id)
 
 def decode_dcsr(value):
     """Decode DCSR register fields"""
@@ -148,21 +155,22 @@ def decode_dcsr(value):
     }
 
 class SwitchThread(gdb.Command):
-    """Switch to a different thread by setting hartsel"""
+    """Switch to a different thread lane"""
     
     def __init__(self):
         super(SwitchThread, self).__init__("vx_thread", gdb.COMMAND_USER)
     
     def invoke(self, arg, from_tty):
-        global _current_thread, _current_warp
+        global _current_thread, _current_warp, _current_core
         
         if not arg:
-            print("Current selection: warp %d, thread %d" % (_current_warp, _current_thread))
+            print("Current selection: core %d, warp %d, thread %d" % (_current_core, _current_warp, _current_thread))
+            print("Note: Only core 0 emulator is currently connected to debug module")
             print("Usage: vx_thread <thread_id>")
-            print("  vx_thread 0  - Switch to thread 0 in current warp")
-            print("  vx_thread 1  - Switch to thread 1 in current warp")
-            print("  vx_thread 2  - Switch to thread 2 in current warp")
-            print("  vx_thread 3  - Switch to thread 3 in current warp")
+            print("  vx_thread 0  - Switch to thread lane 0")
+            print("  vx_thread 1  - Switch to thread lane 1")
+            print("  vx_thread 2  - Switch to thread lane 2")
+            print("  vx_thread 3  - Switch to thread lane 3")
             return
         
         try:
@@ -172,12 +180,12 @@ class SwitchThread(gdb.Command):
                 return
             
             if thread_id == _current_thread:
-                print("Already on thread %d (warp %d)" % (thread_id, _current_warp))
+                print("Already on thread %d" % thread_id)
                 return
             
             if set_threadsel(thread_id):
                 _current_thread = thread_id
-                print("Switched to warp %d, thread %d (hartsel=%d)" % (_current_warp, _current_thread, _current_warp * NUM_THREADS + _current_thread))
+                print("Switched to core %d, warp %d, thread %d" % (_current_core, _current_warp, _current_thread))
             else:
                 print("Failed to switch to thread %d" % thread_id)
         except ValueError:
@@ -190,10 +198,11 @@ class SwitchWarp(gdb.Command):
         super(SwitchWarp, self).__init__("vx_warp", gdb.COMMAND_USER)
     
     def invoke(self, arg, from_tty):
-        global _current_thread, _current_warp
+        global _current_thread, _current_warp, _current_core
         
         if not arg:
-            print("Current selection: warp %d, thread %d" % (_current_warp, _current_thread))
+            print("Current selection: core %d, warp %d, thread %d" % (_current_core, _current_warp, _current_thread))
+            print("Note: Only core 0 emulator is currently connected to debug module")
             print("Usage: vx_warp <warp_id>")
             print("  vx_warp 0  - Switch to warp 0 (keeping current thread)")
             print("  vx_warp 1  - Switch to warp 1 (keeping current thread)")
@@ -203,21 +212,21 @@ class SwitchWarp(gdb.Command):
         
         try:
             warp_id = int(arg)
-            if warp_id < 0 or warp_id >= NUM_WARPS:
-                print("Error: warp_id must be 0-%d" % (NUM_WARPS - 1))
+            if warp_id < 0:
+                print("Error: warp_id must be >= 0")
                 return
             
             if warp_id == _current_warp:
-                print("Already on warp %d (thread %d)" % (warp_id, _current_thread))
+                print("Already on warp %d" % warp_id)
                 return
             
             if set_warpsel(warp_id):
                 _current_warp = warp_id
-                print("Switched to warp %d, thread %d (hartsel=%d)" % (_current_warp, _current_thread, _current_warp * NUM_THREADS + _current_thread))
+                print("Switched to core %d, warp %d, thread %d" % (_current_core, _current_warp, _current_thread))
             else:
                 print("Failed to switch to warp %d" % warp_id)
         except ValueError:
-            print("Error: warp_id must be a number (0-%d)" % (NUM_WARPS - 1))
+            print("Error: warp_id must be a number")
 
 class PrintReg(gdb.Command):
     """Read a register using 'monitor reg force'"""
@@ -239,49 +248,28 @@ class PrintReg(gdb.Command):
             print("Error reading register %s: %s" % (arg, e))
 
 def probe_threads_warps():
-    """Probe to detect the number of threads and warps by trying to read PC from increasing hartsel values"""
-    global NUM_THREADS, NUM_WARPS
+    """Read the number of cores and threads from the backend via separate DMI registers"""
+    global NUM_THREADS
     
-    print("Probing for number of threads and warps...")
+    print("Reading core and thread configuration from backend...")
     
-    # Try to find NUM_THREADS by testing threads in warp 0
-    # Start with a reasonable assumption (e.g., 8 threads max) for initial probing
-    max_threads = 0
-    for thread_id in range(32):  # Try up to 32 threads
-        hartsel = thread_id  # In warp 0, hartsel = thread_id
-        if set_hartsel(hartsel):
-            pc_val = read_abstract_register(0x1020)
-            if pc_val is not None:
-                max_threads = thread_id + 1
-            else:
-                break
+    # Read the configuration registers
+    num_cores_val = dmi_read(DM_NUM_CORES)
+    num_threads_val = dmi_read(DM_NUM_THREADS)
+    
+    if num_cores_val is not None and num_threads_val is not None:
+        NUM_CORES = num_cores_val
+        NUM_THREADS = num_threads_val
+        
+        if NUM_CORES > 0 and NUM_THREADS > 0:
+            print("Backend reports: %d cores, %d threads per warp" % (NUM_CORES, NUM_THREADS))
+            return True
         else:
-            break
-    
-    if max_threads == 0:
-        print("Probing failed: could not detect threads, using defaults: %d threads, %d warps" % (NUM_THREADS, NUM_WARPS))
-        return False
-    
-    # Try to find NUM_WARPS by testing warps with thread 0
-    max_warps = 0
-    for warp_id in range(32):  # Try up to 32 warps
-        hartsel = warp_id * max_threads + 0
-        if set_hartsel(hartsel):
-            pc_val = read_abstract_register(0x1020)
-            if pc_val is not None:
-                max_warps = warp_id + 1
-            else:
-                break
-        else:
-            break
-    
-    if max_threads > 0 and max_warps > 0:
-        NUM_THREADS = max_threads
-        NUM_WARPS = max_warps
-        print("Detected: %d threads per warp, %d warps" % (NUM_THREADS, NUM_WARPS))
-        return True
+            print("Backend reported invalid values: %d cores, %d threads, using default: %d threads" % 
+                  (NUM_CORES, NUM_THREADS, NUM_THREADS))
+            return False
     else:
-        print("Probing failed, using defaults: %d threads, %d warps" % (NUM_THREADS, NUM_WARPS))
+        print("Failed to read configuration registers, using default: %d threads" % NUM_THREADS)
         return False
 
 def read_register_by_name(reg_name):
@@ -307,61 +295,39 @@ class PrintRegAll(gdb.Command):
         super(PrintRegAll, self).__init__("vx_print_all", gdb.COMMAND_USER)
     
     def invoke(self, arg, from_tty):
-        global _current_thread, _current_warp, NUM_THREADS
+        global _current_thread, _current_warp
         
         if not arg:
-            print("Usage: vx_print_all <register_name> [--probe]")
+            print("Usage: vx_print_all <register_name>")
             print("  vx_print_all pc        - Print PC for all threads in current warp")
             print("  vx_print_all a0        - Print a0 for all threads in current warp")
-            print("  vx_print_all pc --probe - Probe for number of threads first")
             return
         
         # Parse arguments
         args = arg.split()
         reg_name = args[0]
-        probe = False
         
-        i = 1
-        while i < len(args):
-            if args[i] == "--probe":
-                probe = True
-            i += 1
-        
-        # Probe if requested (only for threads, not warps)
-        if probe:
-            print("Probing for number of threads in current warp...")
-            max_threads = 0
-            for thread_id in range(32):  # Try up to 32 threads
-                hartsel = _current_warp * NUM_THREADS + thread_id
-                if set_hartsel(hartsel):
-                    pc_val = read_abstract_register(0x1020)
-                    if pc_val is not None:
-                        max_threads = thread_id + 1
-                    else:
-                        break
-                else:
-                    break
-            
-            if max_threads > 0:
-                NUM_THREADS = max_threads
-                print("Detected: %d threads per warp" % NUM_THREADS)
-            else:
-                print("Probing failed, using default: %d threads" % NUM_THREADS)
+        # Transparently read number of threads from debug module register
+        num_threads_val = dmi_read(DM_NUM_THREADS)
+        if num_threads_val is not None and num_threads_val > 0:
+            num_threads = num_threads_val
+        else:
+            # Fallback to default if register read fails
+            num_threads = NUM_THREADS
+            print("Warning: Failed to read DM_NUM_THREADS, using default: %d" % num_threads)
         
         # Save current selection
         saved_thread = _current_thread
         saved_warp = _current_warp
         
         print("=" * 70)
-        print("Register '%s' for all threads in warp %d" % (reg_name, saved_warp))
+        print("Register '%s' for all threads in warp %d (%d threads)" % (reg_name, saved_warp, num_threads))
         print("=" * 70)
-        print("%-6s | %-10s | %s" % ("Thread", "Hartsel", "Value"))
+        print("%-6s | %s" % ("Thread", "Value"))
         print("-" * 70)
         
         # Iterate through all threads in current warp
-        for thread_id in range(NUM_THREADS):
-            hartsel = saved_warp * NUM_THREADS + thread_id
-            
+        for thread_id in range(num_threads):
             # Switch to this thread
             if set_threadsel(thread_id):
                 _current_thread = thread_id
@@ -370,11 +336,11 @@ class PrintRegAll(gdb.Command):
                 reg_val = read_register_by_name(reg_name)
                 
                 if reg_val is not None:
-                    print("%-6d | %-10d | 0x%08x (%d)" % (thread_id, hartsel, reg_val, reg_val))
+                    print("%-6d | 0x%08x (%d)" % (thread_id, reg_val, reg_val))
                 else:
-                    print("%-6d | %-10d | FAILED" % (thread_id, hartsel))
+                    print("%-6d | FAILED" % thread_id)
             else:
-                print("%-6d | %-10d | FAILED (hartsel)" % (thread_id, hartsel))
+                print("%-6d | FAILED (thread selection)" % thread_id)
         
         print("-" * 70)
         
@@ -598,10 +564,12 @@ class DebugState(gdb.Command):
         super(DebugState, self).__init__("debug_state", gdb.COMMAND_USER)
     
     def invoke(self, arg, from_tty):
-        global _current_thread, _current_warp
+        global _current_thread, _current_warp, _current_core
         
         print("=" * 60)
-        print("Complete Debug State for warp %d, thread %d" % (_current_warp, _current_thread))
+        print("Complete Debug State for core %d, warp %d, thread %d" % (_current_core, _current_warp, _current_thread))
+        if _current_core != 0:
+            print("Note: Only core 0 emulator is currently connected")
         print("=" * 60)
         
         # DCSR
@@ -633,10 +601,12 @@ class DebugState(gdb.Command):
         dmcontrol = dmi_read(DM_DMCONTROL)
         if dmcontrol:
             hartsel = (dmcontrol >> 16) & 0x3ff
-            warp_id = hartsel // NUM_THREADS
-            thread_id = hartsel % NUM_THREADS
+            # hartsel now maps to core_id
+            core_id = hartsel
+            thread_lane = dmi_read(DM_THREAD_LANE)
+            warp_sel = dmi_read(DM_WARP_SEL)
             print("\nDMCONTROL: 0x%08x" % dmcontrol)
-            print("  hartsel=%d (warp=%d, thread=%d), dmactive=%d" % (hartsel, warp_id, thread_id, dmcontrol & 1))
+            print("  core_id=%d (hartsel), warp=%d, thread=%d, dmactive=%d" % (core_id, warp_sel if warp_sel is not None else 0, thread_lane if thread_lane is not None else 0, dmcontrol & 1))
 
 class BugRepro(gdb.Command):
     """Reproduce the breakpoint bug and capture state at each step"""
@@ -695,8 +665,8 @@ echo Basic Commands:\n
 echo   vx_thread N     - Switch to thread N (0-3) in current warp\n
 echo   vx_warp N        - Switch to warp N (0-3) keeping current thread\n
 echo   vx_print <name>  - Read register using 'monitor reg <name> force'\n
-echo   vx_print_all <name> [--probe]\n
-echo                    - Print register for all threads in current warp (optionally probe for thread count)\n
+echo   vx_print_all <name>\n
+echo                    - Print register for all threads in current warp (reads thread count from debug module)\n
 echo \n
 echo Debug Investigation Commands:\n
 echo   dcsr            - Show DCSR register (check step bit and cause)\n
@@ -717,5 +687,6 @@ echo   6. (gdb) dcsr_all      # Check all threads\n
 echo   7. (gdb) clear_step    # Clear stuck step bit\n
 echo   8. (gdb) continue      # Should work now\n
 echo \n
-echo Note: hartsel = warp_id * 4 + thread_id\n
+echo Note: hartsel = core_id, use DM_THREAD_LANE and DM_WARP_SEL for thread/warp selection\n
+echo Note: Only core 0 emulator is currently connected to debug module\n
 echo \n

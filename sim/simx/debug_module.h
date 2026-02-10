@@ -21,6 +21,10 @@ namespace vortex {
 #define DM_COMMAND         0x17
 #define DM_ABSTRACTAUTO    0x18
 #define DM_DMCONTROL2      0x1a
+#define DM_NUM_CORES       0x1b
+#define DM_NUM_THREADS     0x1c
+#define DM_THREAD_LANE     0x1d
+#define DM_WARP_SEL        0x1e
 #define DM_AUTHDATA        0x30
 #define DM_SBCS            0x38
 #define DM_SBADDRESS0      0x39
@@ -240,6 +244,10 @@ private:
     bool resumeack_;
     bool havereset_;
     bool is_halted_;
+    
+    // Thread and warp selection (hartsel now maps to core_id)
+    uint32_t thread_lane_;
+    uint32_t warp_selection_;
     
     // Software breakpoint storage: address -> original instruction
     std::map<uint64_t, uint32_t> software_breakpoints_;

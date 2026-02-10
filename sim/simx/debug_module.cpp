@@ -22,21 +22,6 @@ void dm_log(const char* fmt, ...) {
 
 }
 
-// Helper function to decode warp_id and thread_id from hartsel
-// Uses log2(NUM_THREADS) bits for thread_id, remaining bits for warp_id
-static void decode_hartsel(unsigned hartsel, unsigned& warp_id, unsigned& thread_id) {
-    constexpr unsigned thread_bits = vortex::log2ceil(NUM_THREADS);
-    constexpr unsigned thread_mask = (1U << thread_bits) - 1;
-    thread_id = hartsel & thread_mask;
-    warp_id = hartsel >> thread_bits;
-    // Clamp to valid ranges
-    if (thread_id >= NUM_THREADS) {
-        thread_id = 0;
-    }
-    if (warp_id >= NUM_WARPS) {
-        warp_id = 0;
-    }
-}
 
 // Enables or disables verbose logging for debug module operations.
 // Use case: Used to control debug output during development and troubleshooting.
@@ -61,6 +46,8 @@ DebugModule::DebugModule(vortex::Emulator* emulator, size_t mem_size)
       command(0),
       resumereq_prev(false),
       memory(mem_size, 0),
+      thread_lane_(0),
+      warp_selection_(0),
       access_mem_addr(0)
 {
     for (unsigned i = 0; i < datacount; i++) {
@@ -131,13 +118,14 @@ void DebugModule::update_dmstatus()
     dmstatus.allhavereset = havereset_;
     dmstatus.anyhavereset = havereset_;
 
-    // Check if selected hartsel (warp+thread) is valid
-    unsigned warp_id, thread_id;
-    decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
-    bool hart_exists = (warp_id < NUM_WARPS) && (thread_id < NUM_THREADS);
+    // Clamp to valid ranges
+    if (thread_lane_ >= NUM_THREADS) thread_lane_ = 0;
+    if (warp_selection_ >= NUM_WARPS) warp_selection_ = 0;
+    if (dmcontrol.hartsel >= NUM_CORES) dmcontrol.hartsel = 0;
     
-    unsigned max_hartsel = NUM_THREADS * NUM_WARPS;
-    bool hart_out_of_range = (dmcontrol.hartsel >= max_hartsel);
+    bool hart_exists = (dmcontrol.hartsel < NUM_CORES) && (warp_selection_ < NUM_WARPS) && (thread_lane_ < NUM_THREADS);
+    
+    bool hart_out_of_range = (dmcontrol.hartsel >= NUM_CORES);
     
     dmstatus.allnonexistent = !hart_exists || hart_out_of_range;
     dmstatus.anynonexistent = !hart_exists || hart_out_of_range;
@@ -176,6 +164,22 @@ bool DebugModule::dmi_read(unsigned address, uint32_t *value)
         case DM_HARTINFO:
             // Hart info: nscratch=1, dataaccess=1, datasize=datacount, dataaddr=0x380
             *value = (1 << 20) | (1 << 19) | (datacount << 16) | 0x380;
+            break;
+        case DM_NUM_CORES:
+            // Number of cores (note: debug module currently only connects to first emulator)
+            *value = NUM_CORES;
+            break;
+        case DM_NUM_THREADS:
+            // Number of threads per warp
+            *value = NUM_THREADS;
+            break;
+        case DM_THREAD_LANE:
+            // Current thread lane selection
+            *value = thread_lane_;
+            break;
+        case DM_WARP_SEL:
+            // Current warp selection
+            *value = warp_selection_;
             break;
         case DM_ABSTRACTCS:
             *value = read_abstractcs();
@@ -257,6 +261,12 @@ bool DebugModule::dmi_write(unsigned address, uint32_t value)
             return true;
         case DM_SBCS:
             // System Bus Control and Status: accept writes but do nothing (no system bus access)
+            return true;
+        case DM_THREAD_LANE:
+            thread_lane_ = value;
+            return true;
+        case DM_WARP_SEL:
+            warp_selection_ = value;
             return true;
         default:
             dm_log("[DM] DMI WRITE addr=0x%x unimplemented\n", address);
@@ -566,8 +576,8 @@ void DebugModule::execute_command(uint32_t value)
 
         if (postexec) {
             // Get PC from emulator for selected warp
-            unsigned warp_id, thread_id;
-            decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
+            unsigned warp_id = warp_selection_;
+            if (warp_id >= NUM_WARPS) warp_id = 0;
             uint32_t pc = 0;
             if (emulator_ != nullptr) {
                 auto& warp = emulator_->get_warp(warp_id);
@@ -649,8 +659,8 @@ void DebugModule::execute_command(uint32_t value)
         // If PC < 0x100000000, we're in 32-bit space and addresses should be used as-is
         // This fixes the issue where kernels using 32-bit addresses (0x80000000) were incorrectly
         // translated to 64-bit addresses (0x180000000), causing wrong memory access.
-        unsigned warp_id, thread_id;
-        decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
+        unsigned warp_id = warp_selection_;
+        if (warp_id >= NUM_WARPS) warp_id = 0;
         bool use_64bit_addr_space = false;
         if (emulator_ != nullptr) {
             auto& warp = emulator_->get_warp(warp_id);
@@ -814,9 +824,13 @@ void DebugModule::execute_command(uint32_t value)
 vortex::reg_data_t DebugModule::read_register(uint16_t regaddr)
 {
     dm_log("[DM] read_register: regaddr=0x%04x, dmcontrol.hartsel=0x%x (%u)\n", regaddr, dmcontrol.hartsel, dmcontrol.hartsel);
-    unsigned warp_id, thread_id;
-    decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
-    dm_log("[DM] read_register: decoded warp_id=%u, thread_id=%u\n", warp_id, thread_id);
+    unsigned core_id = dmcontrol.hartsel;
+    unsigned warp_id = warp_selection_;
+    unsigned thread_id = thread_lane_;
+    if (thread_id >= NUM_THREADS) thread_id = 0;
+    if (warp_id >= NUM_WARPS) warp_id = 0;
+    if (core_id >= NUM_CORES) core_id = 0;
+    dm_log("[DM] read_register: core_id=%u, warp_id=%u, thread_id=%u (note: only core 0 emulator connected)\n", core_id, warp_id, thread_id);
     vortex::reg_data_t reg_data = {};
     
     // Emulator registers (GPRs, FPRs, PC) - use reg_data_t naturally
@@ -912,8 +926,13 @@ vortex::reg_data_t DebugModule::read_register(uint16_t regaddr)
 
 void DebugModule::write_register(uint16_t regaddr, uint32_t val)
 {
-    unsigned warp_id, thread_id;
-    decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
+    unsigned core_id = dmcontrol.hartsel;
+    unsigned warp_id = warp_selection_;
+    unsigned thread_id = thread_lane_;
+    if (thread_id >= NUM_THREADS) thread_id = 0;
+    if (warp_id >= NUM_WARPS) warp_id = 0;
+    if (core_id >= NUM_CORES) core_id = 0;
+    // Note: core_id selection is stored but only core 0 emulator is currently connected
     
     if (regaddr >= 0x1000 && regaddr <= 0x101F) {
         int gpr_index = regaddr - 0x1000;
@@ -1069,8 +1088,8 @@ void DebugModule::resume_hart(bool single_step)
     is_halted_ = false;
 
     // Log current program state before resuming
-    unsigned warp_id, thread_id;
-    decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
+    unsigned warp_id = warp_selection_;
+    if (warp_id >= NUM_WARPS) warp_id = 0;
     if (emulator_ != nullptr) {
         auto& warp = emulator_->get_warp(warp_id);
         uint64_t current_pc = warp.PC;
@@ -1095,7 +1114,7 @@ void DebugModule::resume_hart(bool single_step)
     // Check if step flag is set (single DCSR shared across all threads)
     bool do_step = single_step || dcsr_.step;
     dm_log("[DM] Resume check: warp_id=%u thread_id=%u, single_step=%d, dcsr_.step=%d, do_step=%d\n", 
-           warp_id, thread_id, single_step ? 1 : 0, dcsr_.step ? 1 : 0, do_step ? 1 : 0);
+           warp_id, thread_lane_, single_step ? 1 : 0, dcsr_.step ? 1 : 0, do_step ? 1 : 0);
     if (do_step) {
         // Set single-step flag so emulator will execute one instruction then halt
         set_single_step_active(true);
@@ -1219,8 +1238,8 @@ void DebugModule::run_test_idle()
     static uint64_t log_counter = 0;
     if (!is_halted_ && !halt_requested_) {
         if ((log_counter++ % 1000) == 0 && emulator_ != nullptr) {
-            unsigned warp_id, thread_id;
-            decode_hartsel(dmcontrol.hartsel, warp_id, thread_id);
+            unsigned warp_id = warp_selection_;
+            if (warp_id >= NUM_WARPS) warp_id = 0;
             auto& warp = emulator_->get_warp(warp_id);
             uint32_t pc = static_cast<uint32_t>(warp.PC);
             dm_log("[DM] run_test_idle: hart running, warp=%u PC=0x%08x\n", warp_id, pc);
