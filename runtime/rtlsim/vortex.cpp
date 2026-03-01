@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <cstring>
 #include <iostream>
 #include <future>
 #include <list>
@@ -196,12 +197,32 @@ public:
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG0, args_addr & 0xffffffff);
     this->dcr_write(VX_DCR_BASE_STARTUP_ARG1, args_addr >> 32);
 
-    this->dcr_write(VX_DCR_BASE_GRID_DIM0, 64);
-    this->dcr_write(VX_DCR_BASE_GRID_DIM1, 1);
-    this->dcr_write(VX_DCR_BASE_GRID_DIM2, 1);
-    this->dcr_write(VX_DCR_BASE_BLOCK_DIM0, 1);
-    this->dcr_write(VX_DCR_BASE_BLOCK_DIM1, 1);
-    this->dcr_write(VX_DCR_BASE_BLOCK_DIM2, 1);
+    // read block and grid dimensions from kernel arguments
+    uint32_t block_dim[3] = {1, 1, 1};
+    uint32_t grid_dim[3] = {1, 1, 1};
+    if (args_addr != 0) {
+      // Read first 24 bytes of kernel arguments (block_dim[3] + grid_dim[3])
+      struct {
+        uint32_t block_dim[3];
+        uint32_t grid_dim[3];
+      } args_dims;
+      this->download(&args_dims, args_addr, sizeof(args_dims));
+      memcpy(block_dim, args_dims.block_dim, sizeof(block_dim));
+      memcpy(grid_dim, args_dims.grid_dim, sizeof(grid_dim));
+      
+      printf("[VXDRV] Reading kernel args from 0x%lx:\n", args_addr);
+      printf("[VXDRV]   block_dim = [%u, %u, %u]\n", block_dim[0], block_dim[1], block_dim[2]);
+      printf("[VXDRV]   grid_dim  = [%u, %u, %u]\n", grid_dim[0], grid_dim[1], grid_dim[2]);
+    } else {
+      printf("[VXDRV] args_addr is 0, using default dimensions [1, 1, 1]\n");
+    }
+    
+    this->dcr_write(VX_DCR_BASE_GRID_DIM0, grid_dim[0]);
+    this->dcr_write(VX_DCR_BASE_GRID_DIM1, grid_dim[1]);
+    this->dcr_write(VX_DCR_BASE_GRID_DIM2, grid_dim[2]);
+    this->dcr_write(VX_DCR_BASE_BLOCK_DIM0, block_dim[0]);
+    this->dcr_write(VX_DCR_BASE_BLOCK_DIM1, block_dim[1]);
+    this->dcr_write(VX_DCR_BASE_BLOCK_DIM2, block_dim[2]);
 
     // start new run
     future_ = std::async(std::launch::async, [&]{

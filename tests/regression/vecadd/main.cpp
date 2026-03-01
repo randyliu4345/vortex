@@ -130,9 +130,24 @@ int main(int argc, char *argv[]) {
   uint32_t num_points = size;
   uint32_t buf_size = num_points * sizeof(TYPE);
 
+  // Set block dimensions to 8 (warp width)
+  const uint32_t block_size = 8;
+  kernel_arg.block_dim[0] = block_size;
+  kernel_arg.block_dim[1] = 1;
+  kernel_arg.block_dim[2] = 1;
+  
+  // Calculate grid dimensions based on number of points
+  kernel_arg.grid_dim[0] = (num_points + block_size - 1) / block_size;  // Round up
+  kernel_arg.grid_dim[1] = 1;
+  kernel_arg.grid_dim[2] = 1;
+
   std::cout << "number of points: " << num_points << std::endl;
   std::cout << "data type: " << Comparator<TYPE>::type_str() << std::endl;
   std::cout << "buffer size: " << buf_size << " bytes" << std::endl;
+  std::cout << "block dimensions: [" << kernel_arg.block_dim[0] << ", " 
+            << kernel_arg.block_dim[1] << ", " << kernel_arg.block_dim[2] << "]" << std::endl;
+  std::cout << "grid dimensions: [" << kernel_arg.grid_dim[0] << ", " 
+            << kernel_arg.grid_dim[1] << ", " << kernel_arg.grid_dim[2] << "]" << std::endl;
 
   kernel_arg.num_points = num_points;
 

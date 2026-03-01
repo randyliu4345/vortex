@@ -40,18 +40,31 @@ int main() {
 	// vx_join(sp);
 
 
+		
+	// Get block and thread indices
+	uint32_t blockIdx = static_cast<uint32_t>(csr_read(VX_CSR_CTA_ID));  // CTA ID is the block index
+	uint32_t threadIdx = static_cast<uint32_t>(vx_thread_id());  // Thread ID within the warp/block
+	uint32_t blockDim = arg->block_dim[0];  // Block size (should be 8)
+	
+	// Calculate global thread ID: blockIdx * blockDim + threadIdx
+	uint32_t globalId = blockIdx * blockDim + threadIdx;
+	//uint32_t globalId = blockIdx;
+	
 	// int g_threadId = warpId * warpSize + threadId;
-	int g_threadId = warpId + threadId;
+	// int g_threadId = warpId + threadId;
 	// int g_threadId = warpId;
 
 	// vx_printf("core id: %d\n", core_id);f
+	vx_printf("block id: %d\n", blockIdx);
+	vx_printf("global id: %d\n", globalId);
 
 	auto src0_ptr = reinterpret_cast<TYPE*>(arg->src0_addr);
 	auto src1_ptr = reinterpret_cast<TYPE*>(arg->src1_addr);
 	auto dst_ptr  = reinterpret_cast<TYPE*>(arg->dst_addr);
 
-	dst_ptr[g_threadId] = src0_ptr[g_threadId] + src1_ptr[g_threadId];
+	dst_ptr[globalId] = src0_ptr[globalId] + src1_ptr[globalId];
 
+	//Activate warp 0 thread 0
 	vx_tmc(warpId == 0);
 
 	return 0;
