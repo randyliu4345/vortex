@@ -150,6 +150,20 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
     wire [NW_WIDTH-1:0] next_count  = count_r + NW_WIDTH'(1);
     wire next_phase = ~phase_r;
 
+    // Forward current-cycle TX count update into barrier-arrive checks.
+    // This prevents a read-before-write hazard: if tx_valid fires in the same
+    // clock cycle as the last barrier arrive, the combinational check would see
+    // the stale (pre-update) tx_count_r[write_addr] and incorrectly unlock
+    // warps before the DXA transfer completes (causing wrong results).
+    // Root cause: warp_ctl_if.valid is registered (+1 cycle via wctl_reg) while
+    // tx_bar_if.valid (SETUP) is combinational, creating a 1-cycle overlap window.
+    wire tx_fwd_same_bar = tx_valid && (tx_bar_addr == write_addr);
+    wire [TX_COUNT_W-1:0] tx_count_fwd =
+        tx_fwd_same_bar
+            ? (tx_is_done ? tx_count_r[write_addr] - TX_COUNT_W'(1)
+                          : tx_count_r[write_addr] + TX_COUNT_W'(1))
+            : tx_count_r[write_addr];
+
     always @(*) begin
         mask_n  = mask_r;
         count_n = count_r;
@@ -167,7 +181,7 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
                 // barrier arrival
                 if (count_r == NW_WIDTH'(req_data.size_m1)) begin
                     // All warps arrived — check tx state
-                    if (tx_count_r[write_addr] == '0) begin
+                    if (tx_count_fwd == '0) begin
                         // No pending DXA: immediate unlock (same as native)
                         count_n = '0;
                         mask_n  = '0;
@@ -252,7 +266,7 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
     // Detect deferred arrival: all warps arrived but tx still pending
     wire deferred_arrive = req_data_valid && ~req_data.is_global && req_data.is_arrive
         && (count_r == NW_WIDTH'(req_data.size_m1))
-        && (tx_count_r[write_addr] != '0);
+        && (tx_count_fwd != '0);
 
     // Detect bar.wait stall during deferred period — warp must be added to deferred mask
     wire wait_stall_deferred = req_data_valid && ~req_data.is_global && ~req_data.is_arrive
@@ -294,7 +308,7 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
             // Immediate unlock: clear arrived_all if it was set
             if (req_data_valid && ~req_data.is_global && req_data.is_arrive
                 && (count_r == NW_WIDTH'(req_data.size_m1))
-                && (tx_count_r[write_addr] == '0)) begin
+                && (tx_count_fwd == '0)) begin
                 arrived_all_r[write_addr] <= 1'b0;
             end
         end
@@ -307,7 +321,15 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
             deferred_unlock_valid_r  <= 1'b0;
             deferred_unlock_mask_r   <= '0;
         end else begin
-            // Fire deferred unlock when tx_count transitions 1→0
+            // Clear deferred dp_ram write when applied.
+            // This comes FIRST so that tx_deferred_fire below takes priority
+            // (last NBS wins): when both fire in the same cycle, the new deferred
+            // write is not lost to the simultaneous apply clear.
+            if (deferred_dp_apply) begin
+                deferred_dp_pending_r <= 1'b0;
+            end
+            // Fire deferred unlock when tx_count transitions 1→0.
+            // LAST in block so tx_deferred_fire always wins over the clear above.
             if (tx_deferred_fire) begin
                 deferred_unlock_valid_r <= 1'b1;
                 deferred_unlock_mask_r  <= deferred_mask_r[tx_bar_addr];
@@ -319,10 +341,6 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
                 deferred_dp_phase_r   <= deferred_phase_r[tx_bar_addr];
             end else begin
                 deferred_unlock_valid_r <= 1'b0;
-            end
-            // Clear deferred dp_ram write when applied
-            if (deferred_dp_apply) begin
-                deferred_dp_pending_r <= 1'b0;
             end
         end
     end
@@ -404,6 +422,7 @@ module VX_bar_unit import VX_gpu_pkg::*; #(
             "*** %s barrier-tx stall: bar=%0d, tx_count=%0d, arrived_all=%0d",
             INSTANCE_ID, bi, tx_count_r[bi], arrived_all_r[bi]))
     end
+
 
 `else  // !BAR_TX_ENABLE
 
