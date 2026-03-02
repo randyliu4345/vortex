@@ -62,7 +62,7 @@ module VX_core_top import VX_gpu_pkg::*; #(
     input wire                              gbar_req_ready,
     input wire                              gbar_rsp_valid,
     input wire [NB_WIDTH-1:0]               gbar_rsp_id,
-    input wire                              gbar_rsp_ready,
+    output wire                             gbar_rsp_ready,
 
     // Status
     output wire                             busy
@@ -76,7 +76,7 @@ module VX_core_top import VX_gpu_pkg::*; #(
     assign gbar_bus_if.req_ready    = gbar_req_ready;
     assign gbar_bus_if.rsp_valid    = gbar_rsp_valid;
     assign gbar_bus_if.rsp_data.id  = gbar_rsp_id;
-    assign gbar_bus_if.rsp_ready    = gbar_rsp_ready;
+    assign gbar_rsp_ready = gbar_bus_if.rsp_ready;
 
 `ifdef EXT_DXA_ENABLE
     VX_dxa_req_bus_if dxa_req_bus_if();
