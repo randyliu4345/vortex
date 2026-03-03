@@ -1238,11 +1238,6 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
             }
           }
         }
-              instr->setParentUUID(uuid);
-              ibuffer.push_back(instr);
-            }
-          }
-        }
       } break;
       case 1: { // META_STORE
         // META_STORE instruction - stores metadata for sparse operations

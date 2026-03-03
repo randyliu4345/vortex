@@ -16,9 +16,6 @@
 #include <tensor_cfg.h>
 #include <vx_intrinsics.h>
 #include <vx_sparsity.h>
-namespace vortex { namespace tensor {
-enum mem_layout { row_major, col_major };
-} }
 
 namespace vortex {
 namespace tensor {
@@ -444,17 +441,11 @@ public:
     });
   }
 
-  template <int COL>
-  static __attribute__((always_inline)) void meta_store(float data) {
-    __asm__ volatile(".insn r 0x0b, 1, 2, x%[col], %[data], x0"           // RISCV_CUSTOM0 instead of 0b
-      :: [col]"i"(COL), [data]"f"(data));
+  template <int FMT_S>
+  static __attribute__((always_inline)) void meta_store_expand(float d0, float d1) {
+    __asm__ volatile(".insn r 0x0b, 1, 2, x%[fmt], %[d0], %[d1]"
+      :: [fmt]"i"(FMT_S), [d0]"f"(d0), [d1]"f"(d1));
   }
-
-// // Set thread mask  // "memory" comment stop compiler reordering.
-// inline void vx_tmc(int thread_mask) {
-//     __asm__ volatile (".insn r %0, 0, 0, x0, %1, x0" :: "i"(RISCV_CUSTOM0), "r"(thread_mask) : "memory");
-// }
-
 
   static __attribute__((always_inline)) void load_metadata_sync(const void* meta_ptr) {
     constexpr uint32_t rtl_i_ratio = 32 / It::bits;
@@ -464,15 +455,15 @@ public:
     constexpr uint32_t num_loads = (num_cols + cols_per_load - 1) / cols_per_load;
     uint32_t lane_id = vx_thread_id();
     auto base = reinterpret_cast<const float*>(meta_ptr);
-    detail::unroll_for<num_loads>([&](auto l) {
-      float data = base[l * NT + lane_id];
-      detail::unroll_for<cols_per_load>([&](auto c) {
-        constexpr uint32_t col = l * cols_per_load + c;
-        if constexpr (col < num_cols) {
-          meta_store<col>(data);
-        }
-      });
-    });
+    if constexpr (num_loads == 1) {
+      float d0 = base[lane_id];
+      meta_store_expand<It::id>(d0, d0);
+    } else {
+      static_assert(num_loads == 2, "num_loads must be 1 or 2");
+      float d0 = base[lane_id];
+      float d1 = base[NT + lane_id];
+      meta_store_expand<It::id>(d0, d1);
+    }
   }
 
   template <typename FragD, typename FragA, typename FragB, typename FragC>
@@ -524,7 +515,7 @@ public:
       register float fd7 __asm__("f31");
 
       constexpr int flags = is_sparse ? 1 : 0;
-      __asm__ volatile (".insn r %[insn], 0, 2, x%[fmd], x%[fms], %[flags]"
+      __asm__ volatile (".insn r %[insn], 0, 2, x%[fmd], x%[fms], x%[flags]"
         : "=f"(fd0), "=f"(fd1), "=f"(fd2), "=f"(fd3), "=f"(fd4), "=f"(fd5), "=f"(fd6), "=f"(fd7)
         : [insn]"i"(RISCV_CUSTOM0), [fmd]"i"(Ot::id), [fms]"i"(It::id), [flags]"i"(flags),
           "f"(fa0), "f"(fa1), "f"(fa2), "f"(fa3), "f"(fa4), "f"(fa5), "f"(fa6), "f"(fa7),
@@ -559,7 +550,7 @@ public:
       register float fd7 __asm__("f17");
 
       constexpr int flags = is_sparse ? 1 : 0;
-      __asm__ volatile (".insn r %[insn], 0, 2, x%[fmd], x%[fms], %[flags]"
+      __asm__ volatile (".insn r %[insn], 0, 2, x%[fmd], x%[fms], x%[flags]"
         : "=f"(fd0), "=f"(fd1), "=f"(fd2), "=f"(fd3), "=f"(fd4), "=f"(fd5), "=f"(fd6), "=f"(fd7)
         : [insn]"i"(RISCV_CUSTOM0), [fmd]"i"(Ot::id), [fms]"i"(It::id), [flags]"i"(flags),
           "f"(fa0), "f"(fa1), "f"(fa2), "f"(fa3), "f"(fa4), "f"(fa5), "f"(fa6), "f"(fa7),
