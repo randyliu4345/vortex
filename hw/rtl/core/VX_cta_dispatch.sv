@@ -107,6 +107,7 @@ module VX_cta_dispatch import VX_gpu_pkg::*;
                         */
                         warp_counter        <= warp_counter + 1;
                         // cta_csr_if.data.cta_id  <= warp_counter;
+                        cta_csr_if.data.warp_local_id <= warp_counter;
                         cta_csr_if.wid      <= cta_dispatch_wid;
                         cta_csr_if.valid    <= 1;
                     end else begin

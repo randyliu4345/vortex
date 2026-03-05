@@ -229,4 +229,12 @@
 `define VX_CSR_CTA_Z                    12'hCC8
 `define VX_CSR_CTA_ID                   12'hCC9
 
+// cta block dimension CSRs
+`define VX_CSR_BLOCK_DIM_X              12'hCCA
+`define VX_CSR_BLOCK_DIM_Y              12'hCCB
+`define VX_CSR_BLOCK_DIM_Z              12'hCCC
+
+// warp local ID within CTA
+`define VX_CSR_CTA_WARP_ID             12'hCCD
+
 `endif // VX_TYPES_VH

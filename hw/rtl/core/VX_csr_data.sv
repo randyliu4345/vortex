@@ -186,7 +186,12 @@ import VX_fpu_pkg::*;
             `VX_CSR_CTA_X      : read_data_rw_w = csr_ctas[read_wid].cta_x;
             `VX_CSR_CTA_Y      : read_data_rw_w = csr_ctas[read_wid].cta_y;
             `VX_CSR_CTA_Z      : read_data_rw_w = csr_ctas[read_wid].cta_z;
-            `VX_CSR_CTA_ID     : read_data_rw_w = csr_ctas[read_wid].cta_id;            
+            `VX_CSR_CTA_ID     : read_data_rw_w = csr_ctas[read_wid].cta_id;
+            `VX_CSR_CTA_WARP_ID: read_data_rw_w = csr_ctas[read_wid].warp_local_id;
+
+            `VX_CSR_BLOCK_DIM_X: read_data_ro_w = `XLEN'(base_dcrs.block_dim[0]);
+            `VX_CSR_BLOCK_DIM_Y: read_data_ro_w = `XLEN'(base_dcrs.block_dim[1]);
+            `VX_CSR_BLOCK_DIM_Z: read_data_ro_w = `XLEN'(base_dcrs.block_dim[2]);            
 
             `VX_CSR_WARP_ID    : read_data_ro_w = `XLEN'(read_wid);
             `VX_CSR_CORE_ID    : read_data_ro_w = `XLEN'(CORE_ID);

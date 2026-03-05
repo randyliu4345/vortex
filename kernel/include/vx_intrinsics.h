@@ -283,6 +283,132 @@ inline __attribute__((const)) int vx_shfl_idx(size_t value, int bval, int cval, 
 
 #ifdef __cplusplus
 }
+
+// CTA Block Index Proxy Structures
+// These allow blockIdx.x, blockIdx.y, blockIdx.z to be used directly
+// without function call syntax, reading from RISC-V CSRs automatically
+
+#ifndef VX_CSR_CTA_X
+#define VX_CSR_CTA_X                    0xCC6
 #endif
+
+#ifndef VX_CSR_CTA_Y
+#define VX_CSR_CTA_Y                    0xCC7
+#endif
+
+#ifndef VX_CSR_CTA_Z
+#define VX_CSR_CTA_Z                    0xCC8
+#endif
+
+#ifndef VX_CSR_BLOCK_DIM_X
+#define VX_CSR_BLOCK_DIM_X               0xCCA
+#endif
+
+#ifndef VX_CSR_BLOCK_DIM_Y
+#define VX_CSR_BLOCK_DIM_Y               0xCCB
+#endif
+
+#ifndef VX_CSR_BLOCK_DIM_Z
+#define VX_CSR_BLOCK_DIM_Z               0xCCC
+#endif
+
+#ifndef VX_CSR_CTA_WARP_ID
+#define VX_CSR_CTA_WARP_ID              0xCCD
+#endif
+
+// Proxy structure for blockIdx with x, y, z members
+struct BlockIdx {
+    struct X {
+        // Implicit conversion to unsigned int triggers the CSR read
+        inline operator unsigned int() const {
+            unsigned int val;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(val) : "i"(VX_CSR_CTA_X));
+            return val;
+        }
+    } x;
+    
+    struct Y {
+        inline operator unsigned int() const {
+            unsigned int val;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(val) : "i"(VX_CSR_CTA_Y));
+            return val;
+        }
+    } y;
+    
+    struct Z {
+        inline operator unsigned int() const {
+            unsigned int val;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(val) : "i"(VX_CSR_CTA_Z));
+            return val;
+        }
+    } z;
+};
+
+// Create a global instance of blockIdx
+// Marking it static ensures no linker errors if included in multiple files.
+// The struct holds no actual data, so the compiler will optimize it away.
+static const BlockIdx blockIdx;
+
+// Proxy structure for blockDim with x, y, z members
+struct BlockDim {
+    struct X {
+        // Implicit conversion to unsigned int triggers the CSR read
+        inline operator unsigned int() const {
+            unsigned int val;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(val) : "i"(VX_CSR_BLOCK_DIM_X));
+            return val;
+        }
+    } x;
+    
+    struct Y {
+        inline operator unsigned int() const {
+            unsigned int val;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(val) : "i"(VX_CSR_BLOCK_DIM_Y));
+            return val;
+        }
+    } y;
+    
+    struct Z {
+        inline operator unsigned int() const {
+            unsigned int val;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(val) : "i"(VX_CSR_BLOCK_DIM_Z));
+            return val;
+        }
+    } z;
+};
+
+// Create a global instance of blockDim
+// Marking it static ensures no linker errors if included in multiple files.
+// The struct holds no actual data, so the compiler will optimize it away.
+static const BlockDim blockDim;
+
+// Proxy structure for threadIdx with x, y, z members
+// threadIdx.x gives the flat thread index within the CTA:
+//   warp_local_id * NUM_THREADS + thread_id_within_warp
+struct ThreadIdx {
+    struct X {
+        inline operator unsigned int() const {
+            unsigned int warp_local_id;
+            __asm__ __volatile__ ("csrr %0, %1" : "=r"(warp_local_id) : "i"(VX_CSR_CTA_WARP_ID));
+            return warp_local_id * vx_num_threads() + vx_thread_id();
+        }
+    } x;
+
+    struct Y {
+        inline operator unsigned int() const {
+            return 0;
+        }
+    } y;
+
+    struct Z {
+        inline operator unsigned int() const {
+            return 0;
+        }
+    } z;
+};
+
+static const ThreadIdx threadIdx;
+
+#endif // __cplusplus
 
 #endif // __VX_INTRINSICS_H__

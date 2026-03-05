@@ -486,6 +486,7 @@ package VX_gpu_pkg;
         logic [`XLEN-1:0]   startup_addr;
         logic [`XLEN-1:0]   startup_arg;
         logic [7:0]         mpm_class;
+        logic [2:0][31:0]   block_dim;
     } base_dcrs_t;
 
     //////////////////////// instruction arguments ////////////////////////////
@@ -914,6 +915,7 @@ package VX_gpu_pkg;
         logic [31:0]    cta_y;
         logic [31:0]    cta_z;
         logic [31:0]    cta_id;
+        logic [31:0]    warp_local_id;
     } csr_cta_data_t;
 
 endpackage

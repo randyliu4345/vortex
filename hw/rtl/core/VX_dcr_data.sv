@@ -40,6 +40,9 @@ module VX_dcr_data import VX_gpu_pkg::*; (
             `VX_DCR_BASE_STARTUP_ARG1 : dcrs.startup_arg[63:32] <= dcr_bus_if.write_data;
         `endif
             `VX_DCR_BASE_MPM_CLASS : dcrs.mpm_class <= dcr_bus_if.write_data[7:0];
+            `VX_DCR_BASE_BLOCK_DIM0 : dcrs.block_dim[0] <= dcr_bus_if.write_data;
+            `VX_DCR_BASE_BLOCK_DIM1 : dcrs.block_dim[1] <= dcr_bus_if.write_data;
+            `VX_DCR_BASE_BLOCK_DIM2 : dcrs.block_dim[2] <= dcr_bus_if.write_data;
             default:;
             endcase
         end
