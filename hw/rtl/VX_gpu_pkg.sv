@@ -531,6 +531,7 @@ package VX_gpu_pkg;
         logic [`XLEN-1:0]   startup_addr;
         logic [`XLEN-1:0]   startup_arg;
         logic [7:0]         mpm_class;
+        logic [2:0][31:0]   block_dim;
     } base_dcrs_t;
 
      typedef struct packed {
