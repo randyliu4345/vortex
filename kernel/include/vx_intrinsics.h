@@ -154,11 +154,6 @@ inline void vx_barrier(int barried_id, int num_warps) {
     __asm__ volatile (".insn r %0, 4, 0, x0, %1, %2" :: "i"(RISCV_CUSTOM0), "r"(barried_id), "r"(num_warps) : "memory");
 }
 
-// Warp Sync
-inline void vx_wsync() {
-    __asm__ volatile (".insn r %0, 7, 0, x0, x0, x0" :: "i"(RISCV_CUSTOM0) : "memory");
-}
-
 // Return current thread identifier
 inline __attribute__((const)) int vx_thread_id() {
     int ret;
@@ -229,8 +224,12 @@ inline __attribute__((const)) int vx_hart_id() {
     return ret;
 }
 
-// Return current cycle counter (deprecated, use vx_rdcycle_sync instead for accurate timing)
-inline uint64_t vx_cycle_count() {
+//
+// profiling
+//
+
+// Return current cycle counter
+inline uint64_t vx_rdcycle() {
 #if __riscv_xlen == 64
     return csr_read(VX_CSR_MCYCLE);
 #elif __riscv_xlen == 32
@@ -244,6 +243,11 @@ inline uint64_t vx_cycle_count() {
 #else
 #error "Unsupported RISC-V XLEN"
 #endif
+}
+
+// Warp Sync
+inline void vx_wsync() {
+    __asm__ volatile (".insn r %0, 7, 0, x0, x0, x0" :: "i"(RISCV_CUSTOM0) : "memory");
 }
 
 /* Safely flushes the warp pipeline and reads the 64-bit cycle counter.
@@ -280,11 +284,92 @@ static inline uint64_t vx_rdcycle_sync() {
     return cycles;
 }
 
-// Fake a dependency on a floating-point register, to prevent cycle counter read before instruction commit.
-inline void vx_create_freg_dep(float dep_src) {
-    size_t dep_gpr;
-    __asm__ volatile ("fmv.x.w %0, %1" : "=r" (dep_gpr) : "f" (dep_src) : "memory");
-    __asm__ volatile ("" : "+r" (dep_gpr) :: "memory");
+typedef struct {
+    uint32_t hi;
+    uint32_t lo;
+} __rdcycle_time;
+
+static inline __attribute__((always_inline)) __rdcycle_time vx_rdcycle_sync_begin(void) {
+    __rdcycle_time t;
+#if __riscv_xlen == 32
+    __asm__ volatile (
+        ".insn r %2, 7, 0, x0, x0, x0\n\t"
+        "csrr %0, %3\n\t"
+        "csrr %1, %4\n\t"
+        : "=r" (t.hi), "=r" (t.lo)
+        : "i" (RISCV_CUSTOM0), "i" (VX_CSR_MCYCLE_H), "i" (VX_CSR_MCYCLE)
+        : "memory"
+    );
+#elif __riscv_xlen == 64
+    uint64_t cycles;
+    __asm__ volatile (
+        ".insn r %1, 7, 0, x0, x0, x0\n\t"
+        "csrr %0, %2\n\t"
+        : "=r" (cycles)
+        : "i" (RISCV_CUSTOM0), "i" (VX_CSR_MCYCLE)
+        : "memory"
+    );
+    t.hi = (uint32_t)(cycles >> 32);
+    t.lo = (uint32_t)cycles;
+#else
+#error "Unsupported RISC-V XLEN"
+#endif
+    return t;
+}
+
+static inline __attribute__((always_inline)) __rdcycle_time vx_rdcycle_sync_end(void) {
+    __rdcycle_time t;
+#if __riscv_xlen == 32
+    __asm__ volatile (
+        ".insn r %2, 7, 0, x0, x0, x0\n\t"
+        "csrr %0, %3\n\t"
+        "csrr %1, %4\n\t"
+        : "=r" (t.lo), "=r" (t.hi)
+        : "i" (RISCV_CUSTOM0), "i" (VX_CSR_MCYCLE), "i" (VX_CSR_MCYCLE_H)
+        : "memory"
+    );
+#elif __riscv_xlen == 64
+    uint64_t cycles;
+    __asm__ volatile (
+        ".insn r %1, 7, 0, x0, x0, x0\n\t"
+        "csrr %0, %2\n\t"
+        : "=r" (cycles)
+        : "i" (RISCV_CUSTOM0), "i" (VX_CSR_MCYCLE)
+        : "memory"
+    );
+    t.hi = (uint32_t)(cycles >> 32);
+    t.lo = (uint32_t)cycles;
+#else
+#error "Unsupported RISC-V XLEN"
+#endif
+    return t;
+}
+
+static inline __attribute__((always_inline)) uint64_t vx_rdcycle_sync_diff(__rdcycle_time start, __rdcycle_time end) {
+#if __riscv_xlen == 32
+    uint32_t diff_hi = end.hi;
+    uint32_t diff_lo = end.lo;
+    uint32_t tmp = start.hi;
+    uint32_t start_lo = start.lo;
+
+    __asm__ volatile (
+        "sub  %0, %0, %2\n\t"
+        "sltu %2, %1, %3\n\t"
+        "sub  %1, %1, %3\n\t"
+        "sub  %0, %0, %2\n\t"
+        : "+r" (diff_hi), "+r" (diff_lo), "+r" (tmp)
+        : "r" (start_lo)
+        : "memory"
+    );
+
+    return ((uint64_t)diff_hi << 32) | diff_lo;
+#elif __riscv_xlen == 64
+    uint64_t s = ((uint64_t)start.hi << 32) | start.lo;
+    uint64_t e = ((uint64_t)end.hi << 32) | end.lo;
+    return e - s;
+#else
+#error "Unsupported RISC-V XLEN"
+#endif
 }
 
 // Memory fence
