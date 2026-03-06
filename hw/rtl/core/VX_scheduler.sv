@@ -34,6 +34,9 @@ module VX_scheduler import VX_gpu_pkg::*; #(
     VX_issue_sched_if.slave issue_sched_if,
     VX_commit_sched_if.slave commit_sched_if,
 
+    // KMU bus
+    VX_kmu_bus_if.slave     kmu_bus_if,
+
     // outputs
     VX_schedule_if.master   schedule_if,
     VX_sched_csr_if.master  sched_csr_if,
@@ -56,6 +59,27 @@ module VX_scheduler import VX_gpu_pkg::*; #(
     wire [PC_BITS-1:0]      schedule_pc;
     wire                    schedule_valid;
     wire                    schedule_ready;
+
+    // CTA dispatcher
+    wire cta_dispatch_fire;
+    wire[`CLOG2(`NUM_WARPS)-1:0] cta_dispatch_wid;
+    wire[`XLEN-1:0] cta_dispatch_pc;
+    wire[`NUM_THREADS-1:0] cta_dispatch_threadmask;
+
+    VX_cta_dispatch cta_dispatcher(
+        .clk                (clk),
+        .reset              (reset),
+        .kmu_bus_if         (kmu_bus_if),
+        .active_warps       (active_warps),
+        .pc                 (cta_dispatch_pc),
+        .param              ('x),
+        .tmask              (cta_dispatch_threadmask),
+        .cta_csr_valid      (sched_csr_if.cta_csr_valid),
+        .cta_csr_wid        (sched_csr_if.cta_csr_wid),
+        .cta_csr_data       (sched_csr_if.cta_csr_data),
+        .cta_dispatch_wid   (cta_dispatch_wid),
+        .dispatch_fire      (cta_dispatch_fire)
+    );
 
     // split/join
     wire                    join_valid;
@@ -100,6 +124,13 @@ module VX_scheduler import VX_gpu_pkg::*; #(
         stalled_warps_n = stalled_warps;
         thread_masks_n  = thread_masks;
         warp_pcs_n      = warp_pcs;
+
+        // dispatch warps
+        if (cta_dispatch_fire) begin
+            active_warps_n[cta_dispatch_wid] = 1;
+            warp_pcs_n[cta_dispatch_wid] = from_fullPC(cta_dispatch_pc);
+            thread_masks_n[cta_dispatch_wid] = cta_dispatch_threadmask;
+        end
 
         // decode unlock
         if (decode_sched_if.valid && decode_sched_if.unlock) begin
@@ -217,6 +248,8 @@ module VX_scheduler import VX_gpu_pkg::*; #(
             end
         end
     end
+
+    // Barrier unit
 
     VX_bar_unit #(
         .INSTANCE_ID (`SFORMATF(("%s-barrier", INSTANCE_ID))),

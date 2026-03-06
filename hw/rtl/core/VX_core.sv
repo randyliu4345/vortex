@@ -42,6 +42,10 @@ module VX_core import VX_gpu_pkg::*; #(
     VX_dxa_bank_wr_if.slave  dxa_bank_wr_if,
 `endif
 
+    // KMU bus
+    VX_kmu_bus_if.slave     kmu_bus_if,
+
+    // Global barrier
     VX_gbar_bus_if.master   gbar_bus_if,
 
     // Status
@@ -113,6 +117,8 @@ module VX_core import VX_gpu_pkg::*; #(
         .decode_sched_if(decode_sched_if),
         .issue_sched_if (issue_sched_if),
         .commit_sched_if(commit_sched_if),
+
+        .kmu_bus_if     (kmu_bus_if),
 
         .schedule_if    (schedule_if),
         .sched_csr_if   (sched_csr_if),

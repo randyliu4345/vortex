@@ -20,18 +20,28 @@ interface VX_sched_csr_if import VX_gpu_pkg::*; ();
     wire [`NUM_WARPS-1:0]           active_warps;
     wire [`NUM_WARPS-1:0][`NUM_THREADS-1:0] thread_masks;
 
+    logic cta_csr_valid;
+    logic [NW_WIDTH-1:0] cta_csr_wid;
+    cta_csr_data_t cta_csr_data;
+
     modport master (
         output cycles,
         output instret,
         output active_warps,
-        output thread_masks
+        output thread_masks,
+        output cta_csr_valid,
+        output cta_csr_wid,
+        output cta_csr_data
     );
 
     modport slave (
         input  cycles,
         input  instret,
         input  active_warps,
-        input  thread_masks
+        input  thread_masks,
+        input  cta_csr_valid,
+        input  cta_csr_wid,
+        input  cta_csr_data
     );
 
 endinterface

@@ -419,6 +419,60 @@ public:
     return 0;
   }
 
+  int start_wg(uint64_t krnl_addr, uint64_t args_addr, uint32_t dim, const uint32_t *grid_dim, const uint32_t *block_dim, uint32_t lmem_size) {
+    // set kernel info
+    CHECK_ERR(this->dcr_write(VX_DCR_BASE_STARTUP_ADDR0, krnl_addr & 0xffffffff), {
+      return err;
+    });
+    CHECK_ERR(this->dcr_write(VX_DCR_BASE_STARTUP_ADDR1, krnl_addr >> 32), {
+      return err;
+    });
+    CHECK_ERR(this->dcr_write(VX_DCR_BASE_STARTUP_ARG0, args_addr & 0xffffffff), {
+      return err;
+    });
+    CHECK_ERR(this->dcr_write(VX_DCR_BASE_STARTUP_ARG1, args_addr >> 32), {
+      return err;
+    });
+
+    if (dim > 0) {
+      CHECK_ERR(this->dcr_write(VX_DCR_BASE_GRID_DIM0, grid_dim[0]), {
+        return err;
+      });
+      CHECK_ERR(this->dcr_write(VX_DCR_BASE_BLOCK_DIM0, block_dim[0]), {
+        return err;
+      });
+      if (dim > 1) {
+        CHECK_ERR(this->dcr_write(VX_DCR_BASE_GRID_DIM1, grid_dim[1]), {
+          return err;
+        });
+        CHECK_ERR(this->dcr_write(VX_DCR_BASE_BLOCK_DIM1, block_dim[1]), {
+           return err;
+        });
+        if (dim > 2) {
+          CHECK_ERR(this->dcr_write(VX_DCR_BASE_GRID_DIM2, grid_dim[2]), {
+            return err;
+          });
+          CHECK_ERR(this->dcr_write(VX_DCR_BASE_BLOCK_DIM2, block_dim[2]), {
+             return err;           });
+        }
+      }
+    }
+
+    CHECK_ERR(this->dcr_write(VX_DCR_BASE_LMEM_SIZE, lmem_size), {
+      return err;
+    });
+
+    // start execution
+    CHECK_FPGA_ERR(api_.fpgaWriteMMIO64(fpga_, 0, MMIO_CMD_TYPE, CMD_RUN), {
+      return -1;
+    });
+
+    // clear mpm cache
+    mpm_cache_.clear();
+
+    return 0;
+  }
+
   int ready_wait(uint64_t timeout) {
     std::unordered_map<uint32_t, std::stringstream> print_bufs;
 

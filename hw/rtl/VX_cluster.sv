@@ -33,6 +33,9 @@ module VX_cluster import VX_gpu_pkg::*; #(
     // Memory
     VX_mem_bus_if.master        mem_bus_if [`L2_MEM_PORTS],
 
+    // KMU bus
+    VX_kmu_bus_if.slave         kmu_bus_if[1],
+
     // Status
     output wire                 busy
 );
@@ -50,6 +53,18 @@ module VX_cluster import VX_gpu_pkg::*; #(
         sysmem_perf_tmp.l2cache = l2_perf;
     end
 `endif
+
+    VX_kmu_bus_if per_socket_kmu_bus_if[NUM_SOCKETS]();
+
+    VX_kmu_arb #(
+        .NUM_INPUTS (1),
+        .NUM_OUTPUTS (NUM_SOCKETS)
+    ) kmu_arb (
+        .clk        (clk),
+        .reset      (reset),
+        .bus_in_if  (kmu_bus_if),
+        .bus_out_if (per_socket_kmu_bus_if)
+    );
 
     VX_gbar_bus_if per_socket_gbar_bus_if[NUM_SOCKETS]();
     VX_gbar_bus_if gbar_bus_if();
@@ -250,6 +265,8 @@ module VX_cluster import VX_gpu_pkg::*; #(
             .dxa_req_bus_if (per_socket_dxa_req_bus_if[socket_id]),
             .per_core_bank_wr_if(per_core_bank_wr_if[socket_id * `SOCKET_SIZE +: `SOCKET_SIZE]),
         `endif
+
+            .kmu_bus_if     (per_socket_kmu_bus_if[socket_id +: 1]),
 
             .gbar_bus_if    (per_socket_gbar_bus_if[socket_id]),
 

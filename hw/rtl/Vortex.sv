@@ -48,6 +48,18 @@ module Vortex import VX_gpu_pkg::*, VX_trace_pkg::*; (
     `STATIC_ASSERT(`IS_POW2(`NUM_CORES), ("NUM_CORES must be a power of 2"));
     `STATIC_ASSERT(`IS_POW2(`SOCKET_SIZE), ("SOCKET_SIZE must be a power of 2"));
 
+VX_kmu_bus_if kmu_bus_in[1]();
+VX_kmu_bus_if per_cluster_kmu_bus_if[`NUM_CLUSTERS]();
+
+VX_kmu kmu(
+    .clk (clk),
+    .reset (reset),
+    .dcr_wr_valid (dcr_wr_valid),
+    .dcr_wr_addr  (dcr_wr_addr),
+    .dcr_wr_data  (dcr_wr_data),
+    .kmu_bus_if   (kmu_bus_in[0])
+);
+
 `ifdef SCOPE
     localparam scope_cluster = 0;
     `SCOPE_IO_SWITCH (`NUM_CLUSTERS);
@@ -135,6 +147,16 @@ module Vortex import VX_gpu_pkg::*, VX_trace_pkg::*; (
 
     wire [`NUM_CLUSTERS-1:0] per_cluster_busy;
 
+    VX_kmu_arb #(
+        .NUM_INPUTS (1),
+        .NUM_OUTPUTS (`NUM_CLUSTERS)
+    ) kmu_arb (
+        .clk        (clk),
+        .reset      (reset),
+        .bus_in_if  (kmu_bus_in),
+        .bus_out_if (per_cluster_kmu_bus_if[`NUM_CLUSTERS-1:0])
+    );
+
     // Generate all clusters
     for (genvar cluster_id = 0; cluster_id < `NUM_CLUSTERS; ++cluster_id) begin : g_clusters
 
@@ -159,6 +181,8 @@ module Vortex import VX_gpu_pkg::*, VX_trace_pkg::*; (
             .dcr_bus_if         (cluster_dcr_bus_if),
 
             .mem_bus_if         (per_cluster_mem_bus_if[cluster_id * `L2_MEM_PORTS +: `L2_MEM_PORTS]),
+
+            .kmu_bus_if         (per_cluster_kmu_bus_if[cluster_id +: 1]),
 
             .busy               (per_cluster_busy[cluster_id])
         );

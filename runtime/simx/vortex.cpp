@@ -347,6 +347,41 @@ public:
     return 0;
   }
 
+  int start_wg(uint64_t krnl_addr, uint64_t args_addr, uint32_t dim, const uint32_t *grid_dim, const uint32_t *block_dim, uint32_t lmem_size) {
+    // ensure prior run completed
+    if (future_.valid()) {
+      future_.wait();
+    }
+
+    // set kernel info
+    this->dcr_write(VX_DCR_BASE_STARTUP_ADDR0, krnl_addr & 0xffffffff);
+    this->dcr_write(VX_DCR_BASE_STARTUP_ADDR1, krnl_addr >> 32);
+    this->dcr_write(VX_DCR_BASE_STARTUP_ARG0, args_addr & 0xffffffff);
+    this->dcr_write(VX_DCR_BASE_STARTUP_ARG1, args_addr >> 32);
+
+    if (dim > 0) {
+      this->dcr_write(VX_DCR_BASE_GRID_DIM0, grid_dim[0]);
+      this->dcr_write(VX_DCR_BASE_BLOCK_DIM0, block_dim[0]);
+      if (dim > 1) {
+        this->dcr_write(VX_DCR_BASE_GRID_DIM1, grid_dim[1]);
+        this->dcr_write(VX_DCR_BASE_BLOCK_DIM1, block_dim[1]);
+        if (dim > 2) {
+          this->dcr_write(VX_DCR_BASE_GRID_DIM2, grid_dim[2]);
+          this->dcr_write(VX_DCR_BASE_BLOCK_DIM2, block_dim[2]);
+        }
+      }
+    }
+    this->dcr_write(VX_DCR_BASE_LMEM_SIZE, lmem_size);
+    
+    // start new run
+    future_ = std::async(std::launch::async, [&] { processor_.run(); });
+
+    // clear mpm cache
+    mpm_cache_.clear();
+
+    return 0;
+  }
+
   int ready_wait(uint64_t timeout) {
     if (!future_.valid())
       return 0;

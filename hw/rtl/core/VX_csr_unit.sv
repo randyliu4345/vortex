@@ -82,6 +82,10 @@ module VX_csr_unit import VX_gpu_pkg::*; #(
         .active_warps   (sched_csr_if.active_warps),
         .thread_masks   (sched_csr_if.thread_masks),
 
+        .cta_csr_valid   (sched_csr_if.cta_csr_valid),
+        .cta_csr_wid     (sched_csr_if.cta_csr_wid),
+        .cta_csr_data    (sched_csr_if.cta_csr_data),
+
     `ifdef EXT_F_ENABLE
         .fpu_csr_if     (fpu_csr_if),
     `endif

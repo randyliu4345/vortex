@@ -54,6 +54,10 @@ import VX_fpu_pkg::*;
     input wire [`NUM_WARPS-1:0]         active_warps,
     input wire [`NUM_WARPS-1:0][`NUM_THREADS-1:0] thread_masks,
 
+    input wire                          cta_csr_valid,
+    input wire [NW_WIDTH-1:0]           cta_csr_wid,
+    input cta_csr_data_t                cta_csr_data,
+
     input wire                          read_enable,
     input wire [UUID_WIDTH-1:0]         read_uuid,
     input wire [NW_WIDTH-1:0]           read_wid,
@@ -78,6 +82,7 @@ import VX_fpu_pkg::*;
     // CSRs Write /////////////////////////////////////////////////////////////
 
     reg [`XLEN-1:0] mscratch;
+    cta_csr_data_t [`NUM_WARPS-1:0] cta_csrs;
 
 `ifdef EXT_F_ENABLE
     reg [`NUM_WARPS-1:0][INST_FRM_BITS+`FP_FLAGS_BITS-1:0] fcsr, fcsr_n;
@@ -153,6 +158,9 @@ import VX_fpu_pkg::*;
                 end
             endcase
         end
+        if (cta_csr_valid) begin
+            cta_csrs[cta_csr_wid] <= cta_csr_data;
+        end
     end
 
     // CSRs read //////////////////////////////////////////////////////////////
@@ -176,6 +184,11 @@ import VX_fpu_pkg::*;
             `VX_CSR_FCSR       : read_data_rw_w = `XLEN'(fcsr[read_wid]);
         `endif
             `VX_CSR_MSCRATCH   : read_data_rw_w = mscratch;
+
+            `VX_CSR_CTA_X      : read_data_rw_w = cta_csrs[read_wid].cta_x;
+            `VX_CSR_CTA_Y      : read_data_rw_w = cta_csrs[read_wid].cta_y;
+            `VX_CSR_CTA_Z      : read_data_rw_w = cta_csrs[read_wid].cta_z;
+            `VX_CSR_CTA_ID     : read_data_rw_w = cta_csrs[read_wid].cta_id;
 
             `VX_CSR_WARP_ID    : read_data_ro_w = `XLEN'(read_wid);
             `VX_CSR_CORE_ID    : read_data_ro_w = `XLEN'(CORE_ID);

@@ -149,6 +149,17 @@ extern int vx_start(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h hargum
   return (g_callbacks.start)(hdevice, hkernel, harguments);
 }
 
+extern int vx_start_wg(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harguments,
+                       uint32_t dimension, const uint32_t* grid_dim, const uint32_t * block_dim, uint32_t lmem_size) {
+  int profiling_mode = get_profiling_mode();
+  if (profiling_mode != 0) {
+    CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_BASE_MPM_CLASS, profiling_mode), {
+      return err;
+    });
+  }
+  return (g_callbacks.start_wg)(hdevice, hkernel, harguments, dimension, grid_dim, block_dim, lmem_size);
+}
+
 extern int vx_ready_wait(vx_device_h hdevice, uint64_t timeout) {
   return (g_callbacks.ready_wait)(hdevice, timeout);
 }

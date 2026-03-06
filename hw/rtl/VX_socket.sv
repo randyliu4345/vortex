@@ -40,7 +40,10 @@ module VX_socket import VX_gpu_pkg::*; #(
     VX_dxa_bank_wr_if.slave     per_core_bank_wr_if [`SOCKET_SIZE],
 `endif
 
-    // Barrier
+    // KMU bus
+    VX_kmu_bus_if.slave     kmu_bus_if[1],
+
+    // Global barrier
     VX_gbar_bus_if.master   gbar_bus_if,
 
     // Status
@@ -51,6 +54,18 @@ module VX_socket import VX_gpu_pkg::*; #(
     localparam scope_core = 0;
     `SCOPE_IO_SWITCH (`SOCKET_SIZE);
 `endif
+
+    VX_kmu_bus_if per_core_kmu_bus_if[`SOCKET_SIZE]();
+
+    VX_kmu_arb #(
+        .NUM_INPUTS (1),
+        .NUM_OUTPUTS (`SOCKET_SIZE)
+    ) kmu_arb (
+        .clk        (clk),
+        .reset      (reset),
+        .bus_in_if  (kmu_bus_if),
+        .bus_out_if (per_core_kmu_bus_if[`SOCKET_SIZE-1:0])
+    );
 
     VX_gbar_bus_if per_core_gbar_bus_if[`SOCKET_SIZE]();
 
@@ -302,6 +317,8 @@ module VX_socket import VX_gpu_pkg::*; #(
             .dxa_req_bus_if (per_core_dxa_req_bus_if[core_id]),
             .dxa_bank_wr_if (per_core_bank_wr_if[core_id]),
         `endif
+
+            .kmu_bus_if     (per_core_kmu_bus_if[core_id]),
 
             .gbar_bus_if    (per_core_gbar_bus_if[core_id]),
 

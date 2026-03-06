@@ -533,6 +533,21 @@ package VX_gpu_pkg;
         logic [7:0]         mpm_class;
     } base_dcrs_t;
 
+     typedef struct packed {
+        logic [`XLEN-1:0]   pc;
+        logic [2:0][31:0]   grid_dim;
+        logic [2:0][31:0]   block_dim;
+        logic [`XLEN-1:0]   param;
+    } kmu_data_t;
+
+    typedef struct packed {
+        logic [31:0]    cta_x;
+        logic [31:0]    cta_y;
+        logic [31:0]    cta_z;
+        logic [31:0]    cta_id;
+        logic [31:0]    local_warp_id;
+    } cta_csr_data_t;
+
     //////////////////////// instruction arguments ////////////////////////////
 
     localparam INST_ARGS_BITS = 3 + ALU_TYPE_BITS + 20;
