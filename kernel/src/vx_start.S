@@ -23,22 +23,8 @@ _start:
 
 #ifdef KMU_ENABLE
 
-  # set global pointer register
-  la    gp, __global_pointer
-
-  # set stack pointer register
-  LOAD_IMMEDIATE64(sp, STACK_BASE_ADDR)
-  csrr  t0, VX_CSR_MHARTID
-  sll   t1, t0, STACK_LOG2_SIZE
-  sub   sp, sp, t1
-
-  # set thread pointer register
-  # use address space after BSS region
-  la    t1, __tbss_size
-  mul   t0, t0, t1
-  la    tp, _end
-  add   tp, tp, t0
-  ret
+  # initialize per-thread registers
+  jal   init_regs
 
   # initialize TLS for all warps
   call  __init_tls
@@ -53,11 +39,7 @@ _start:
 #endif
 
   # call main program routine
-  csrr  a0, VX_CSR_MSCRATCH
   call  main
-
-  # Moving to single thread
-  # vx_tmc(0 == vx_warp_id());
 
   # call exit routine
   tail  exit
@@ -108,6 +90,8 @@ _start:
   tail  exit
 .size _start, .-_start
 
+#endif
+
 .section .text
 .type init_regs, @function
 .local init_regs
@@ -131,6 +115,8 @@ init_regs:
   la    tp, _end
   add   tp, tp, t0
   ret
+
+#ifndef KMU_ENABLE
 
 .section .text
 .type init_regs_all, @function

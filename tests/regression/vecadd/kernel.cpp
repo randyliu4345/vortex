@@ -42,10 +42,13 @@ int main() {
 	// Calculate global thread ID
 	// threadIdx.x gives the flat thread index within the CTA (warp_local_id * NUM_THREADS + thread_id)
 	// globalId = blockIdx.x * blockDim.x + threadIdx.x
-	uint32_t globalId = blockIdx.x * blockDim.x + threadIdx.x;
+	uint32_t bidx = blockIdx.x;
+	uint32_t tidx = threadIdx.x;
+	uint32_t bdim = blockDim.x;
+	uint32_t globalId = bidx * bdim + tidx;
 	
 	vx_printf("block id x: %d, threadIdx.x: %d, global id: %d\n", 
-		blockIdx.x, threadIdx.x, globalId);
+		bidx, tidx, globalId);
 
 	auto src0_ptr = reinterpret_cast<TYPE*>(arg->src0_addr);
 	auto src1_ptr = reinterpret_cast<TYPE*>(arg->src1_addr);

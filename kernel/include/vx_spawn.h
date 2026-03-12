@@ -15,6 +15,7 @@
 #define __VX_SPAWN_H__
 
 #include <vx_intrinsics.h>
+#include <vx_print.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -30,10 +31,7 @@ typedef union {
   uint32_t m[3];
 } dim3_t;
 
-extern __thread dim3_t blockIdx;
-extern __thread dim3_t threadIdx;
 extern dim3_t gridDim;
-extern dim3_t blockDim;
 
 extern __thread uint32_t __local_group_id;
 extern uint32_t __warps_per_group;

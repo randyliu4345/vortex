@@ -134,6 +134,17 @@ int main(int argc, char *argv[]) {
   std::cout << "data type: " << Comparator<TYPE>::type_str() << std::endl;
   std::cout << "buffer size: " << buf_size << " bytes" << std::endl;
 
+  // Set block dimensions to 8 (warp width)
+  const uint32_t block_size = 16;
+  kernel_arg.block_dim[0] = block_size;
+  kernel_arg.block_dim[1] = 1;
+  kernel_arg.block_dim[2] = 1;
+
+  // Calculate grid dimensions based on number of points
+  kernel_arg.grid_dim[0] = (num_points + block_size - 1) / block_size;  // Round up
+  kernel_arg.grid_dim[1] = 1;
+  kernel_arg.grid_dim[2] = 1;
+
   kernel_arg.num_points = num_points;
 
   // allocate device memory

@@ -32,7 +32,7 @@ VM_ENABLED = "expr: 1 if $VM_ENABLE else 0"
 EXT_D_ENABLE = "expr: $XLEN_64"
 FLEN = "expr: 64 if $EXT_D_ENABLE else 32"
 
-KMU_ENABLE = false
+KMU_ENABLE = true
 KMU_ENABLED = "expr: 1 if $KMU_ENABLE else 0"
 
 # extensions
