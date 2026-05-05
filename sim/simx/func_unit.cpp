@@ -225,7 +225,7 @@ void LsuUnit::tick() {
 		if (std::get_if<LsuType>(&trace->op_type)) {
 			auto lsu_type = std::get<LsuType>(trace->op_type);
 			is_fence = (lsu_type == LsuType::FENCE);
-			is_write = (lsu_type == LsuType::STORE);
+			is_write = (lsu_type == LsuType::STORE || lsu_type == LsuType::MST);
 		} else if (std::get_if<AmoType>(&trace->op_type)) {
 			auto amp_type = std::get<AmoType>(trace->op_type);
 			is_write = (amp_type != AmoType::LR);

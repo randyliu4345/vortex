@@ -1,0 +1,481 @@
+
+Page
+1
+of 11
+# CS254A — Spring 2026 — Lab 2
+## `vx.ldm` / `vx.stm` — a Matrix-Tile Load/Store ISA Extension for the Vortex LSU
+**Total: 5 points** (SimX: 2.5 pts, RTL: 2.5 pts).
+**Late submission: −25% for up to 24 hours late; none accepted after that.**
+---
+## 1. Background
+### 1.1 Warp-synchronous, cooperative memory
+Modern GPUs multiply matrix tiles cooperatively across every thread of a warp. One
+MMA instruction produces a register output on every lane simultaneously — this is
+**warp-synchronous cooperative execution**. Loading the tile into the cooperative
+register layout is itself a cooperative operation; on NVIDIA GPUs, `ldmatrix`
+("**LDSM**") replaces ~30 per-lane scalar loads with a single warp-wide tile load.
+Vortex already has a warp-synchronous MMA (`mma_sync` in
+`kernel/include/vx_tensor.h`). The **load** and **store** of matrix fragments are
+still software emulations: `load_matrix_sync` / `store_matrix_sync` issue a per-
+register unrolled scalar load with per-thread address arithmetic (~46 instructions
+per fragment per lane at NT=16).
+### 1.2 Design philosophy: an LSU extension, independent of TCU
+Matrix tile load/store is fundamentally a **memory-subsystem** operation, not a
+compute operation. We add the capability to the **LSU** as a pair of new
+instructions:
+- **`vx.ldm`** — matrix load: read an NT×8 tile from memory into 8 FP registers per
+lane.
+- **`vx.stm`** — matrix store: write 8 FP registers per lane back to an NT×8 tile
+in memory.
+Both are **always available, independent of `EXT_TCU_ENABLE`**. The blocked
+addressing happens to match the MMA fragment layout (so the TCU can consume loaded
+data immediately), but the path does not touch the TCU — the address generator
+lives inside the LSU.
+### 1.3 Goal
+- Add `vx.ldm` / `vx.stm` to the ISA (CUSTOM1 opcode, R-type).
+- Implement them in SimX (functional) and Verilog RTL (cycle-accurate), using
+**macro/uop split + LSU AGU**.
+- Integrate into `load_matrix_sync` / `store_matrix_sync` so `sgemm_tcu` runs
+accelerated.
+- Measure the speedup.
+---
+## 2. ISA specification
+### 2.1 Encoding (R-type, opcode = `CUSTOM1` = `0x2B`)
+```
+31 25 24 20 19 15 14 12 11 7 6 0
++-----------+-------+-------+------+------+---------+
+| funct7 | rs2 | rs1 |funct3| rd | opcode |
++-----------+-------+-------+------+------+---------+
+9 | ldm | base | ES T| fd | CUSTOM1 ← vx.ldm
+10 | ldm | base | ES T| fs | CUSTOM1 ← vx.stm
+```
+| Field | Width | Meaning |
+|---------|-------|---------|
+| `funct7`| 7 | **9** = load, **10** = store |
+| `rs1` | 5 | integer register holding tile base pointer (uniform across
+warp) |
+| `rs2` | 5 | integer register holding `ldm` (leading dimension, in
+*elements*; uniform) |
+| `rd` / `fs` | 5 | starting FP register of the 8-register fragment (f0…f31) |
+| `funct3[0]` | 1 | `T` — transpose (0 = row-major, 1 = col-major) |
+| `funct3[2:1]` | 2 | `ES` — element size: 00=8b, 01=16b, 10=32b, 11=64b |
+`NR` (registers per fragment) is hardwired to **8**.
+### 2.2 Fragment register ABI
+The starting register `rd` selects the fragment bank (matches the `mma_sync` ABI):
+| `rd` | Fragment | Notes |
+|------|----------|-------|
+| `0` | `matrix_a` | f0–f7 |
+| `10` | `matrix_b` | f10–f17 (used only when NRB=8) |
+| `24` | `accumulator` | f24–f31 |
+Role (A / B / C) is **derived** from `rd[4:0]` at the AGU call site — no explicit
+role field in the instruction.
+### 2.3 Blocked address formula
+For lane `L`, uop counter `r`, and role:
+```
+┌ lane-origin ───────────────┐ ┌ register step ───────────────┐
+matrix_a: row = L/tcK + block_idx*tcM + (r/k_steps) * (a_sub_blocks*tcM)
+col = (L%tcK)*i_ratio + (r%k_steps) * (tcK*i_ratio)
+matrix_b: row = (L%tcK)*i_ratio + (r/b_sub_steps) * (tcK*i_ratio)
+col = L/tcK + block_idx*tcN + (r%b_sub_steps) * (b_sub_blocks*tcN)
+accumulator: row = L/tcN + (r/n_steps)*tcM
+col = L%tcN + (r%n_steps)*tcN
+if T: swap(row, col)
+addr = base + (row * ldm + col) * (1 << ES)
+```
+Tile constants (`tcM`, `tcN`, `tcK`, `i_ratio`, `*_steps`, `*_sub_blocks`) come
+from `wmma_config_t<NT>` in [sim/common/tensor_cfg.h](sim/common/tensor_cfg.h); the
+RTL AGU duplicates them as localparams so the extension is available without TCU.
+### 2.4 Microarchitecture: macro → uop split + LSU AGU
+Each `vx.ldm` / `vx.stm` macro instruction is **expanded into 8 LSU uops** (one per
+fragment register) by the uop sequencer. The per-lane blocked address is computed
+by the **LSU AGU** inside the LSU slice:
+```
+decode uop sequencer operand fetch dispatch → LSU slice
++--------+ +---------------+ +------------+ +---------+ +---------+
+| MLD/ | ---> | VX_lsu_uops | --> | r0/r1/r2 | -> | buffer |->| AGU + |
+| MST | | 8 uops | | fetched | | | | LSU ops |
+| macro | | stamp r, | | | | | +---------+
+| | | inc rd/rs2 | | | | |
++--------+ +---------------+ +------------+ +---------+
+op_args.ldm op_args.ldm{r=0..7} rs1/rs2/rs3_data
+(es, t, r=0)
+```
+**Two distinct args types** reflect the two-tier design:
+- **`ldm_args_t`** (macro): `{ es, t, r }` — what decode extracts from the ISA.
+Fits in the `op_args` union alongside `alu_args_t`, `lsu_args_t`, etc.
+- **`lsu_args_t`** (uop): `{ width, is_float, offset, is_store }` — plain LSU
+plumbing; matrix ops piggyback on the LSU datapath but their op_type (`MLD`/`MST`)
+makes the AGU take over address computation.
+The decoder emits `op_args.ldm`; the sequencer stamps `r` per uop; the LSU slice's
+AGU consumes `op_args.ldm.{es, t, r}` + role-derived-from-`rd[4:0]` to compute the
+per-lane address.
+---
+## 3. Part A — SimX implementation (2.5 pts)
+### Step A1. Type system
+**File:** `sim/simx/types.h` *(provided complete — no changes needed)*
+The type system extensions are already provided:
+```cpp
+enum class LsuType {
+LOAD, STORE, FENCE,
+MLD, // vx.ldm — matrix LSU load (always available)
+MST, // vx.stm — matrix LSU store (always available)
+};
+struct IntrLdmArgs {
+uint32_t es : 2; // element-size log2
+uint32_t t : 1; // transpose
+uint32_t r : 3; // uop counter 0..7
+};
+```
+`IntrLdmArgs` is already added to the `IntrArgs` variant. Familiarize yourself with
+these types before proceeding.
+### Step A2. Decode `CUSTOM1` into 8 LSU uops
+**File:** `sim/simx/decode.cpp`
+Add a `case Opcode::EXT2:` handler. Parse `es` and `t` from `funct3`, determine
+whether it is a load or store from `funct7`, and expand the single macro into 8
+uops (one per fragment register `r = 0..7`). For each uop, set the opcode type
+(`MLD` or `MST`), fill `IntrLdmArgs{es, t, r}`, assign the correct source and
+destination registers, and push the instruction to the ibuffer.
+The boilerplate for uuid stamping and the loop are provided — your task is to fill
+in the instruction fields inside the loop:
+```cpp
+case Opcode::EXT2: {
+// Matrix LSU extension:
+// CUSTOM1 (0x2B), vx.ldm (funct7=9), vx.stm (funct7=10).
+// Each instruction expands into 8 LSU uops with LsuType::MLD or MST:
+// MLD uop: Integer rs1=base, Integer rs2=ldm, Float dest=reg0+r
+// MST uop: Integer rs1=base, Float rs2=reg0+r, Integer rs3=ldm
+// The per-uop IntrLdmArgs carries es, t, and the counter r.
+if (funct7 != 9 && funct7 != 10) std::abort();
+uint32_t uuid_hi = (uuid >> 32) & 0xffffffff;
+uint32_t uuid_lo = uuid & 0xffffffff;
+uint32_t uuid_shift = 32 - 3; // top 3 bits carry r
+for (uint32_t r = 0; r < 8; ++r) {
+uint32_t uuid_lo_x = (r << uuid_shift) | uuid_lo;
+uint64_t uuid_x = (static_cast<uint64_t>(uuid_hi) << 32) | uuid_lo_x;
+auto instr = std::allocate_shared<Instr>(instr_pool_, uuid_x, FUType::LSU);
+// TODO: set instruction opcode type, destination, source registers, args.
+ibuffer.push_back(instr);
+}
+} break;
+```
+### Step A3. Implement the AGU helper + MLD/MST execute
+**File:** `sim/simx/execute.cpp`
+A static helper `lsu_agu_addr(args, role, lane, base, ldm)` is already provided —
+it implements the blocked formula from §2.3 using
+`vortex::tensor::wmma_config_t<NUM_THREADS>`.
+Add `LsuType::MLD` and `LsuType::MST` cases to the existing LSU visitor. For each
+active lane, call `lsu_agu_addr` to get the address, then perform a 4-byte dcache
+read (MLD) or write (MST). For MLD, NaN-box the result and set `rd_write = true`.
+Role is derived from `rdest.idx & 0x1f` (≤9 → matrix_a, ≥24 → accumulator, else
+matrix_b).
+```cpp
+case LsuType::MLD: {
+auto ldmArgs = std::get<IntrLdmArgs>(instrArgs);
+auto trace_data = std::make_shared<LsuTraceData>(num_threads);
+trace->data = trace_data;
+// TODO: for each lane t:
+// - call lsu_agu_addr to compute the per-lane address
+// - read the value from dcache (4 bytes)
+// - NaN-box result into rd_data[t]
+// set rd_write = true
+} break;
+case LsuType::MST: {
+auto ldmArgs = std::get<IntrLdmArgs>(instrArgs);
+auto trace_data = std::make_shared<LsuTraceData>(num_threads);
+trace->data = trace_data;
+// TODO: for each lane t:
+// - call lsu_agu_addr to compute the per-lane address
+// - write the value to dcache (4 bytes)
+} break;
+```
+The existing `LSU::LOAD` / `STORE` / `FENCE` cases stay **unchanged** — the matrix
+path is entirely new.
+### Step A4. Kernel wrapper
+**File:** `kernel/include/vx_tensor.h` *(provided complete — no changes needed)*
+The kernel wrapper is already implemented. It defines `use_vx_ldm_stm<Frag>()` and
+emits the `vx.ldm` / `vx.stm` inline assembly inside `load_matrix_sync` /
+`store_matrix_sync` when the fast path is eligible. The scalar fallback is
+preserved and `-DVX_LDM_STM_DISABLE` forces scalar for A/B testing.
+### Step A5. Build and measure
+```bash
+# From <vortex> root
+CONFIGS="-DEXT_TCU_ENABLE" make -C hw
+CONFIGS="-DEXT_TCU_ENABLE" make -C sim/simx
+CONFIGS="-DEXT_TCU_ENABLE" make -C runtime/simx
+make -C runtime/stub
+CONFIGS="-DEXT_TCU_ENABLE" make -C kernel
+cd tests/regression/sgemm_tcu
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make clean && \
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx OPTS="-m64
+-n64 -k64"
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx OPTS="-
+m128 -n128 -k128"
+```
+Report instruction-count and cycle-count reduction vs `-DVX_LDM_STM_DISABLE`
+baseline.
+---
+## 4. Part B — RTL implementation (2.5 pts)
+Layered across four files plus two new LSU sub-modules:
+```
+decode -> uop sequencer -> operand fetch -> dispatch -> VX_lsu_slice
+(VX_lsu_uops: 8 uops) (AGU inside)
+```
+### Step B1. Matrix args + op_types
+**File:** `hw/rtl/VX_gpu_pkg.sv` *(provided complete — no changes needed)*
+The package file already contains `ldm_args_t` as a new variant in `op_args_t`
+union (unguarded — independent of `EXT_TCU_ENABLE`):
+```systemverilog
+typedef struct packed {
+logic [(INST_ARGS_BITS-2-1-3)-1:0] __padding;
+logic [1:0] es; // element-size log2
+logic t; // transpose
+logic [2:0] r; // uop counter 0..7
+} ldm_args_t;
+typedef union packed {
+alu_args_t alu;
+fpu_args_t fpu;
+lsu_args_t lsu;
+ldm_args_t ldm; // matrix LSU extension — always available
+...
+} op_args_t;
+```
+Add `INST_LSU_MLD = 4'b0111` and `INST_LSU_MST = 4'b1100` to the LSU op_type
+encoding. Tighten `inst_lsu_is_fence` to an exact match (`op == INST_LSU_FENCE`) so
+the new encodings don't alias to fence.
+### Step B2. Decode `vx.ldm` / `vx.stm` into LSU ops
+**File:** `hw/rtl/core/VX_decode.sv`
+Add `INST_EXT2` case (unguarded):
+```systemverilog
+INST_EXT2: begin
+case (funct7)
+7'd9: begin // vx.ldm
+// TODO: ex_type=EX_LSU, op_type=?
+// TODO: op_args.ldm = {es=?, t=?, r=0}
+// TODO: USED_IREG(rs1), USED_IREG(rs2), USED_FREG(rd)
+end
+7'd10: begin // vx.stm
+// TODO: ex_type=EX_LSU, op_type=?
+// TODO: op_args.ldm = {es=?, t=?, r=0}
+// TODO: USED_IREG(rs1), USED_IREG(rs2), USED_FREG(rs3)
+end
+endcase
+end
+```
+### Step B3. Expand macro into 8 uops
+**File:** `hw/rtl/core/VX_uop_sequencer.sv` *(modify)*
+**Provided:** `hw/rtl/core/VX_lsu_uops.sv` *(complete — no changes needed)*
+`VX_lsu_uops` is provided as a complete reference implementation of the 8-uop FSM
+sequencer.
+Your task is to wire it into `VX_uop_sequencer.sv`:
+- Detect matrix LSU ops using `inst_lsu_is_mat(op_type)` and set `is_ldm_stm`
+- Instantiate `VX_lsu_uops` and connect its inputs/outputs
+- Mux `uop_data` and `uop_done` between the WMMA path and the matrix-LSU path
+### Step B4. Per-lane AGU inside the LSU slice
+**File:** `hw/rtl/core/VX_lsu_slice.sv` *(modify)*
+**Provided:** `hw/rtl/core/VX_lsu_agu.sv` *(complete — no changes needed)*
+`VX_lsu_agu` is provided as a complete reference implementation of the per-lane
+blocked address generator.
+Your task is to wire it into `VX_lsu_slice.sv`:
+- Detect `op_type == INST_LSU_MLD` or `INST_LSU_MST` and set `tile_mode`
+- Derive the fragment role from `rd[4:0]` (≤9 → matrix_a, ≥24 → accumulator, else
+matrix_b)
+- Instantiate `VX_lsu_agu` for each lane and connect `role`, `es`, `t`, `r`,
+`base`, `ldm`
+- Select between tile address and normal offset address based on `tile_mode`
+- Alias `MLD→LW` / `MST→SW` for the LSU width/fmt helpers
+- Gate `mem_req_rw` on `op_type` for matrix ops
+`VX_lsu_slice` gates the AGU address on `op_type in {MLD, MST}`:
+```systemverilog
+wire is_ldm = (op_type == INST_LSU_MLD);
+wire is_stm = (op_type == INST_LSU_MST);
+wire tile_mode = is_ldm || is_stm;
+wire [4:0] frag_reg_idx = execute_if.data.rd[4:0];
+wire [1:0] tile_role = (frag_reg_idx <= 5'd9) ? 2'd0 : // matrix_a
+(frag_reg_idx >= 5'd24) ? 2'd2 : // accumulator
+2'd1; // matrix_b
+for (genvar L = 0; L < NUM_LANES; ++L) begin : g_full_addr
+wire [`XLEN-1:0] base_L = execute_if.data.rs1_data[L];
+wire [`XLEN-1:0] ldm_L = is_stm ? execute_if.data.rs3_data[L]
+: execute_if.data.rs2_data[L];
+wire [`XLEN-1:0] tile_addr;
+VX_lsu_agu #(.LANE_IDX(L)) agu (
+.role (tile_role),
+.es (execute_if.data.op_args.ldm.es),
+.t (execute_if.data.op_args.ldm.t),
+.r (execute_if.data.op_args.ldm.r),
+.base (base_L),
+.ldm (ldm_L),
+.addr (tile_addr)
+);
+assign full_addr[L] = tile_mode ? tile_addr : (rs1_data[L] + sext(offset));
+end
+// Alias MLD/MST to LW/SW for the LSU's width/fmt helpers:
+wire [INST_LSU_BITS-1:0] eff_op_type =
+is_ldm ? INST_LSU_LW :
+is_stm ? INST_LSU_SW : execute_if.data.op_type;
+// Store-bit comes from op_type for matrix ops:
+assign mem_req_rw = tile_mode ? is_stm : op_args.lsu.is_store;
+```
+`VX_lsu_agu` is self-contained — it declares its own tile-constant localparams
+(derived from `NUM_THREADS`) so the matrix LSU extension compiles and runs
+**without `EXT_TCU_ENABLE`**. The module is provided complete; study its interface
+to understand how to instantiate it in `VX_lsu_slice.sv`.
+### Step B5. Build and test
+```bash
+# From <vortex> root
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" make -C sim/rtlsim
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" make -C runtime/rtlsim
+cd tests/regression/sgemm_tcu
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make
+clean && \
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make
+CONFIGS="-DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make run-rtlsim
+CONFIGS="-DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make run-rtlsim OPTS="-
+m64 -n64 -k64"
+```
+---
+## 5. Reference speedup (measured)
+| Simulator | Dims | Baseline instrs | `vx.ldm/stm` instrs | Instr ↓ | Baseline
+cycles | `vx.ldm/stm` cycles | Cycle Δ |
+|---|---|---:|---:|---:|---:|---:|---:|
+| SimX | 32×32×32 | 58,869 | 48,036 | **18%** | 42,147 | 39,642 |
+**−6%** |
+| SimX | 64×64×64 | 401,781 | 317,732 | **21%** | 209,817 | 186,885 |
+**−11%** |
+| SimX | 128×128×128 | 3,020,661 | 2,357,028 | **22%** | 1,587,396 | 1,371,089 |
+**−14%** |
+| rtlsim | 32×32×32 | — | 42,062 | — | — | 41,128 |
+— |
+| rtlsim | 64×64×64 | — | 193,486 | — | — | 90,371 |
+— |
+**Instruction-count reduction is the headline result (12–22%).** SimX now also
+shows cycle savings that scale with tile count (4–14% faster at larger dims)
+because the uop-expansion model amortizes well. On rtlsim cycles go up slightly —
+the 8 LSU uops per macro currently serialize through the single LSU port; a wider
+LSU that issues the tile in parallel would recover this overhead (left as a follow-
+on optimization).
+---
+## 6. Deliverables
+1. Patch (git diff vs `v2.3` tag) or a fork URL with your changes.
+2. `REPORT.md` (one page): files changed, instruction/cycle counts before/after for
+SimX and rtlsim at 32/64/128 dims, any deviations from the spec.
+3. Logs showing `PASSED!` for SimX at all three dims and rtlsim at 32/64.
+---
+## 7. Grading rubric
+| Item | Points |
+|---|---:|
+| SimX: `Opcode::EXT2` decode — 8 uops with correct operands and `IntrLdmArgs` |
+0.7 |
+| SimX: MLD/MST execute cases — correct role derivation, AGU call, dcache
+read/write | 1.0 |
+| SimX: `sgemm_tcu` passes on SimX at all three dimensions | 0.8 |
+| **SimX total** | **2.5** |
+| RTL: `ldm_args_t` union member, `INST_LSU_MLD/MST`, decoder change | 0.5 |
+| RTL: `VX_uop_sequencer.sv` — wire `is_ldm_stm`, instantiate `VX_lsu_uops` | 0.6 |
+| RTL: `VX_lsu_slice.sv` — instantiate `VX_lsu_agu`, wire addresses, gate
+`mem_req_rw` | 0.7 |
+| RTL: AGU wired into `VX_lsu_slice`; `sgemm_tcu` passes on rtlsim | 0.7 |
+| **RTL total** | **2.5** |
+| **Grand total** | **5.0** |
+---
+## 8. References
+- **RISC-V Unprivileged ISA Manual** (R-type format, CUSTOM0–3 opcode space):
+<https://riscv.org/specifications/>
+- **Vortex GPGPU** (install + config in `README.md`, `hw/rtl/VX_config.vh`):
+<https://github.com/vortexgpgpu/vortex.git>
+- **NVIDIA PTX `ldmatrix`** (warp-cooperative matrix load):
+<https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-load-
+instruction-ldmatrix>
+---
+## Appendix A — File map (reference implementation)
+| File | Role | Status |
+|---|---|---|
+| `sim/simx/types.h` | `LsuType::MLD/MST`, `IntrLdmArgs`, variant | modified |
+| `sim/simx/decode.cpp` | `Opcode::EXT2` → 8 LSU uops | modified |
+| `sim/simx/execute.cpp` | `lsu_agu_addr()` helper + MLD/MST cases | modified |
+| `kernel/include/vx_tensor.h` | `use_vx_ldm_stm<Frag>()` + inline-asm emission |
+modified |
+| `hw/rtl/VX_gpu_pkg.sv` | `ldm_args_t` union member; `INST_LSU_MLD/MST`; fence
+tight-check | modified |
+| `hw/rtl/core/VX_decode.sv` | `INST_EXT2` decode → `EX_LSU` with `op_args.ldm` |
+modified |
+| `hw/rtl/core/VX_uop_sequencer.sv` | gates WMMA and matrix-LSU on op_type; matrix
+path unguarded | modified |
+| `hw/rtl/core/VX_lsu_uops.sv` | 8-uop sequencer (one per register `r`) |
+**provided** |
+| `hw/rtl/core/VX_lsu_agu.sv` | per-lane blocked AGU; self-contained tile constants
+| **provided** |
+| `hw/rtl/core/VX_lsu_slice.sv` | AGU gated on `op_type == MLD/MST`; role derived
+from `rd[4:0]` | modified |
+### Provided vs. skeleton files
+| File | Students should |
+|---|---|
+| `sim/simx/decode.cpp` | Complete `Opcode::EXT2` case (TODO inside loop) |
+| `sim/simx/execute.cpp` | Complete `MLD` and `MST` execute cases (TODO) |
+| `hw/rtl/core/VX_uop_sequencer.sv` | Wire `is_ldm_stm`, instantiate `VX_lsu_uops`
+(TODO) |
+| `hw/rtl/core/VX_lsu_slice.sv` | Instantiate `VX_lsu_agu`, wire addresses (TODO) |
+| `sim/simx/types.h` | **Provided complete** |
+| `hw/rtl/VX_gpu_pkg.sv` | **Provided complete** |
+| `kernel/include/vx_tensor.h` | **Provided complete** |
+| `hw/rtl/core/VX_lsu_agu.sv` | **Provided complete** |
+| `hw/rtl/core/VX_lsu_uops.sv` | **Provided complete** |
+The matrix LSU extension is available in every build configuration — **the AGU and
+uop sequencer do not depend on `EXT_TCU_ENABLE`**. The decoder's `INST_EXT2` case,
+the `VX_uop_sequencer` matrix path, `VX_lsu_uops`, `VX_lsu_agu`, and the
+`VX_lsu_slice` AGU integration are all unguarded.
+## Appendix B — Setting up and running sgemm_tcu
+### Base repository
+Clone the **v2.3 release** of Vortex:
+```bash
+git clone https://github.com/vortexgpgpu/vortex.git
+cd vortex
+git checkout v2.3
+```
+Copy the skeleton files from the lab zip into the repo at their corresponding
+paths.
+### Building
+```bash
+# Generate hardware headers
+CONFIGS="-DEXT_TCU_ENABLE" make -C hw
+# Build SimX + runtime + kernel
+CONFIGS="-DEXT_TCU_ENABLE" make -C sim/simx
+CONFIGS="-DEXT_TCU_ENABLE" make -C runtime/simx
+make -C runtime/stub
+CONFIGS="-DEXT_TCU_ENABLE" make -C kernel
+```
+### SimX tests
+```bash
+cd tests/regression/sgemm_tcu
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make clean && \
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx OPTS="-m64
+-n64 -k64"
+CONFIGS="-DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx OPTS="-
+m128 -n128 -k128"
+```
+### rtlsim tests (requires NUM_THREADS=16)
+```bash
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" make -C sim/rtlsim
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" make -C runtime/rtlsim
+cd tests/regression/sgemm_tcu
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make
+clean && \
+CONFIGS="-DEXT_TCU_ENABLE -DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make
+CONFIGS="-DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make run-rtlsim
+CONFIGS="-DNUM_THREADS=16" VORTEX_RT_PATH=<vortex>/runtime make run-rtlsim OPTS="-
+m64 -n64 -k64"
+```
+### Scalar baseline (for before/after comparison)
+```bash
+CONFIGS="-DVX_LDM_STM_DISABLE -DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime
+make clean && \
+CONFIGS="-DVX_LDM_STM_DISABLE -DEXT_TCU_ENABLE" VORTEX_RT_PATH=<vortex>/runtime
+make
+CONFIGS="-DVX_LDM_STM_DISABLE" VORTEX_RT_PATH=<vortex>/runtime make run-simx
+```
+Pass criterion: each run ends with `PASSED!` and a `PERF:` line with non-trivial
+`instrs=` / `cycles=` numbers.

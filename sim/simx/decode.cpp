@@ -294,6 +294,8 @@ static op_string_t op_string(const Instr &instr) {
         }
       }
       case LsuType::FENCE: return {"FENCE", ""};
+      case LsuType::MLD:   return {"MLD", ""};
+      case LsuType::MST:   return {"MST", ""};
       default:
         std::abort();
       }
@@ -1130,6 +1132,9 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
     //   MST uop: Integer rs1=base, Float rs2=reg0+r, Integer rs3=ldm
     // The per-uop IntrLdmArgs carries es, t, and the counter r.
     if (funct7 != 9 && funct7 != 10) std::abort();
+    // funct3: T in bit 0; ES (element size) in bits [2:1] per §2.1
+    const uint32_t t_bit = funct3 & 1u;
+    const uint32_t es = (funct3 >> 1) & 3u;
     uint32_t uuid_hi = (uuid >> 32) & 0xffffffff;
     uint32_t uuid_lo = uuid & 0xffffffff;
     uint32_t uuid_shift = 32 - 3; // top 3 bits carry r
@@ -1137,7 +1142,22 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       uint32_t uuid_lo_x = (r << uuid_shift) | uuid_lo;
       uint64_t uuid_x = (static_cast<uint64_t>(uuid_hi) << 32) | uuid_lo_x;
       auto instr = std::allocate_shared<Instr>(instr_pool_, uuid_x, FUType::LSU);
-      // TODO: set instruction opcode type, destination, source registers, args.
+      uint32_t freg = rd + r;
+      if (funct7 == 9) {
+        // vx.ldm
+        instr->setOpType(LsuType::MLD);
+        instr->setArgs(IntrLdmArgs{es, t_bit, r});
+        instr->setDestReg(freg, RegType::Float);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+      } else {
+        // vx.stm (funct7 == 10)
+        instr->setOpType(LsuType::MST);
+        instr->setArgs(IntrLdmArgs{es, t_bit, r});
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, freg, RegType::Float);
+        instr->setSrcReg(2, rs2, RegType::Integer);
+      }
       ibuffer.push_back(instr);
     }
   } break;

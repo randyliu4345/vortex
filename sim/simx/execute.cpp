@@ -799,19 +799,37 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
         auto ldmArgs = std::get<IntrLdmArgs>(instrArgs);
         auto trace_data = std::make_shared<LsuTraceData>(num_threads);
         trace->data = trace_data;
-        // TODO: for each lane t:
-        //   - call lsu_agu_addr to compute the per-lane address
-        //   - read the value from dcache (4 bytes)
-        //   - NaN-box result into rd_data[t]
-        // set rd_write = true
+        const uint32_t role = derive_role(rdest.idx & 0x1f);
+        constexpr uint32_t data_bytes = 4;
+        for (uint32_t t = thread_start; t < num_threads; ++t) {
+          if (!warp.tmask.test(t))
+            continue;
+          uint64_t mem_addr = lsu_agu_addr(ldmArgs, role, t,
+                                           rs1_data[t].u,
+                                           rs2_data[t].u);
+          trace_data->mem_addrs.at(t) = {mem_addr, data_bytes};
+          uint64_t read_data = 0;
+          this->dcache_read(&read_data, mem_addr, data_bytes);
+          rd_data[t].u64 = nan_box(static_cast<uint32_t>(read_data));
+        }
+        rd_write = true;
       } break;
       case LsuType::MST: {
         auto ldmArgs = std::get<IntrLdmArgs>(instrArgs);
         auto trace_data = std::make_shared<LsuTraceData>(num_threads);
         trace->data = trace_data;
-        // TODO: for each lane t:
-        //   - call lsu_agu_addr to compute the per-lane address
-        //   - write the value to dcache (4 bytes)
+        const uint32_t role = derive_role(rsrc1.idx & 0x1f);
+        constexpr uint32_t data_bytes = 4;
+        for (uint32_t t = thread_start; t < num_threads; ++t) {
+          if (!warp.tmask.test(t))
+            continue;
+          uint64_t mem_addr = lsu_agu_addr(ldmArgs, role, t,
+                                           rs1_data[t].u,
+                                           rs3_data[t].u);
+          trace_data->mem_addrs.at(t) = {mem_addr, data_bytes};
+          uint64_t write_data = rs2_data[t].u64;
+          this->dcache_write(&write_data, mem_addr, data_bytes);
+        }
       } break;
       default:
         std::abort();
