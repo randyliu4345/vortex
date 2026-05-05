@@ -51,15 +51,36 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
         .data_t (lsu_res_t)
     ) result_no_rsp_if();
 
-    `UNUSED_VAR (execute_if.data.rs3_data)
+    // TODO: Instantiate VX_lsu_agu to compute per-lane blocked addresses
+    // for vx.ldm / vx.stm (op_type == INST_LSU_MLD or INST_LSU_MST).
+    //
+    // The AGU takes: op_args.ldm{es,t,r}, rs1=base, rs2/rs3=ldm, rd[4:0]=frag reg
+    // and outputs per-lane addresses for each of NUM_LANES threads.
+    //
+    // Role is derived from rd[4:0]: <=9 → A, >=24 → C, else B
+    // Also: alias MLD→LW / MST→SW for width/fmt helpers,
+    //       gate mem_req_rw on op_type for matrix ops.
+    //
+    // TODO: insert your implementation here
 
-    // full address calculation
+        wire req_is_fence, rsp_is_fence;
 
-    wire req_is_fence, rsp_is_fence;
+    // TODO: detect matrix LSU ops and derive tile_mode, tile_role
+    // tile_mode = (op_type == INST_LSU_MLD) || (op_type == INST_LSU_MST)
+    // tile_role: derive from rd[4:0] (<=9 → 0=A, >=24 → 2=C, else 1=B)
+    wire tile_mode = 1'b0; // TODO: implement
+    wire [1:0] tile_role = 2'd0; // TODO: implement
 
     wire [NUM_LANES-1:0][`XLEN-1:0] full_addr;
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_full_addr
+        // Matrix LSU path: per-lane AGU computes the blocked address.
+        // Regular path: rs1_data + sext(offset).
+        // TODO: Compute per-lane blocked address using VX_lsu_agu.
+        // Instantiate VX_lsu_agu #(.LANE_IDX(i)) with role, es, t, r, base, ldm inputs.
+        // For non-matrix ops, use the standard offset-based address.
+        // TODO: select between tile address (from VX_lsu_agu) and normal offset address
         assign full_addr[i] = execute_if.data.rs1_data[i] + `SEXT(`XLEN, execute_if.data.op_args.lsu.offset);
+        // TODO: replace with: tile_mode ? agu_addr[i] : (rs1_data[i] + offset)
     end
 
     // address type calculation
@@ -144,7 +165,17 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
                            && ~fence_lock;
 
     assign mem_req_mask = execute_if.data.tmask;
-    assign mem_req_rw = execute_if.data.op_args.lsu.is_store;
+    // For matrix LSU ops, the store-bit is encoded in the op_type;
+    // for regular ops, it's in op_args.lsu.is_store.
+    // TODO: gate mem_req_rw on tile_mode for matrix ops (MST=write, MLD=read)
+    assign mem_req_rw = execute_if.data.op_args.lsu.is_store; // TODO: handle tile_mode
+
+    // Matrix LSU ops always transfer one 32-bit word per lane (one fragment
+    // register). Alias MLD/MST to LW/SW so the LSU's width/fmt helpers and
+    // response-path sign-extension work unchanged.
+    wire [INST_LSU_BITS-1:0] eff_op_type =
+        // TODO: alias MLD→LW and MST→SW for width/fmt helpers
+                 execute_if.data.op_type;
 
     // address formatting
 
@@ -160,7 +191,7 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
         reg [LSU_WORD_SIZE-1:0] mem_req_byteen_w;
         always @(*) begin
             mem_req_byteen_w = '0;
-            case (inst_lsu_wsize(execute_if.data.op_type))
+            case (inst_lsu_wsize(eff_op_type))
                 0: begin // 8-bit
                     mem_req_byteen_w[req_align[i]] = 1'b1;
                 end
@@ -186,9 +217,9 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
     // memory misalignment not supported!
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_missalign
         wire lsu_req_fire = execute_if.valid && execute_if.ready;
-        `RUNTIME_ASSERT((~lsu_req_fire || ~execute_if.data.tmask[i] || req_is_fence || (full_addr[i] % (1 << inst_lsu_wsize(execute_if.data.op_type))) == 0),
+        `RUNTIME_ASSERT((~lsu_req_fire || ~execute_if.data.tmask[i] || req_is_fence || (full_addr[i] % (1 << inst_lsu_wsize(eff_op_type))) == 0),
             ("%t: misaligned memory access, wid=%0d, PC=0x%0h, addr=0x%0h, wsize=%0d! (#%0d)",
-                $time, execute_if.data.wid, to_fullPC(execute_if.data.PC), full_addr[i], inst_lsu_wsize(execute_if.data.op_type), execute_if.data.uuid))
+                $time, execute_if.data.wid, to_fullPC(execute_if.data.PC), full_addr[i], inst_lsu_wsize(eff_op_type), execute_if.data.uuid))
     end
 
     // store data formatting
@@ -281,13 +312,15 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
     end
 
     // pack memory request tag
+    //   For matrix LSU ops, alias op_type to LW/SW so the response-path's
+    //   inst_lsu_fmt/wsize helpers work unchanged.
     assign mem_req_tag = {
         execute_if.data.uuid,
         execute_if.data.wid,
         execute_if.data.PC,
         execute_if.data.wb,
         execute_if.data.rd,
-        execute_if.data.op_type,
+        eff_op_type,
         req_align,
         execute_if.data.pid,
         pkt_waddr,

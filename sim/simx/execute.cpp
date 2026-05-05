@@ -30,6 +30,9 @@
 #include "processor_impl.h"
 #endif
 #include "VX_types.h"
+// tensor_cfg.h supplies the tile constants used by the matrix LSU AGU helper.
+// It's pure C++ templates with no TCU-specific state, so always include it.
+#include "tensor_cfg.h"
 
 using namespace vortex;
 
@@ -45,6 +48,63 @@ inline int64_t check_boxing(int64_t a) {
   if (is_nan_boxed(a))
     return a;
   return nan_box(0x7fc00000); // NaN
+}
+
+// TODO: Implement lsu_agu_addr — per-lane blocked address generator for vx.ldm/vx.stm.
+// Mirrors VX_lsu_agu. Uses wmma_config_t<NUM_THREADS> tile constants.
+//   addr[L] = base + (row(L,r,role)*ldm + col(L,r,role)) * (1<<es)
+// role: 0=matrix_a, 1=matrix_b, 2=accumulator. See §2.3 of spec.
+static inline uint64_t lsu_agu_addr(const IntrLdmArgs &args,
+                                    uint32_t role,
+                                    uint32_t lane,
+                                    uint64_t base,
+                                    uint64_t ldm) {
+  using cfg = vortex::tensor::wmma_config_t<NUM_THREADS>;
+  uint32_t elem_bytes = 1u << args.es;
+  uint32_t i_ratio    = (elem_bytes >= 4) ? 1 : (4 / elem_bytes);
+
+  uint32_t block_row = 0, block_col = 0;
+  uint32_t stride_r = 0, stride_c = 0;
+  uint32_t elem_row = 0, elem_col = 0;
+
+  if (role == 0) { // matrix_a
+    uint32_t blk_idx = (cfg::a_block_size == NUM_THREADS) ? 0 : (lane / cfg::a_block_size);
+    uint32_t lane_in = (cfg::a_block_size == NUM_THREADS) ? lane : (lane % cfg::a_block_size);
+    block_row = (lane_in / cfg::tcK) + (blk_idx * cfg::tcM);
+    block_col = (lane_in % cfg::tcK) * i_ratio;
+    stride_r  = cfg::a_sub_blocks * cfg::tcM;
+    stride_c  = cfg::tcK * i_ratio;
+    uint32_t block_m = args.r / cfg::k_steps;
+    uint32_t block_k = args.r % cfg::k_steps;
+    elem_row = block_m * stride_r;
+    elem_col = block_k * stride_c;
+  } else if (role == 1) { // matrix_b
+    uint32_t blk_idx = (cfg::b_block_size == NUM_THREADS) ? 0 : (lane / cfg::b_block_size);
+    uint32_t lane_in = (cfg::b_block_size == NUM_THREADS) ? lane : (lane % cfg::b_block_size);
+    block_col = (lane_in / cfg::tcK) + (blk_idx * cfg::tcN);
+    block_row = (lane_in % cfg::tcK) * i_ratio;
+    stride_r  = cfg::tcK * i_ratio;
+    stride_c  = cfg::b_sub_blocks * cfg::tcN;
+    uint32_t block_k = args.r / cfg::b_sub_steps;
+    uint32_t block_n = args.r % cfg::b_sub_steps;
+    elem_row = block_k * stride_r;
+    elem_col = block_n * stride_c;
+  } else { // accumulator
+    block_row = lane / cfg::tcN;
+    block_col = lane % cfg::tcN;
+    stride_r  = cfg::tcM;
+    stride_c  = cfg::tcN;
+    uint32_t block_m = args.r / cfg::n_steps;
+    uint32_t block_n = args.r % cfg::n_steps;
+    elem_row = block_m * stride_r;
+    elem_col = block_n * stride_c;
+  }
+
+  if (args.t) { std::swap(block_row, block_col); std::swap(elem_row, elem_col); }
+
+  uint64_t row = (uint64_t)block_row + (uint64_t)elem_row;
+  uint64_t col = (uint64_t)block_col + (uint64_t)elem_col;
+  return base + row * ldm * elem_bytes + col * elem_bytes;
 }
 
 void Emulator::fetch_registers(std::vector<reg_data_t>& out, uint32_t wid, uint32_t src_index, const RegOpd& reg) {
@@ -658,9 +718,17 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       rd_write = true;
     },
     [&](LsuType lsu_type) {
-      auto lsuArgs = std::get<IntrLsuArgs>(instrArgs);
+      // Helper: derive role from the FP fragment register's raw 5-bit index.
+      //   0..9 -> matrix_a, 10..17 -> matrix_b, 24..31 -> accumulator.
+      auto derive_role = [](uint32_t reg_idx) -> uint32_t {
+        if (reg_idx <= 9)  return 0;
+        if (reg_idx >= 24) return 2;
+        return 1;
+      };
+
       switch (lsu_type) {
       case LsuType::LOAD: {
+        auto lsuArgs = std::get<IntrLsuArgs>(instrArgs);
         auto trace_data = std::make_shared<LsuTraceData>(num_threads);
         trace->data = trace_data;
         uint32_t data_bytes = 1 << (lsuArgs.width & 0x3);
@@ -701,6 +769,7 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
         rd_write = true;
       } break;
       case LsuType::STORE: {
+        auto lsuArgs = std::get<IntrLsuArgs>(instrArgs);
         auto trace_data = std::make_shared<LsuTraceData>(num_threads);
         trace->data = trace_data;
         uint32_t data_bytes = 1 << (lsuArgs.width & 0x3);
@@ -725,6 +794,24 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       } break;
       case LsuType::FENCE: {
         // no compute
+      } break;
+      case LsuType::MLD: {
+        auto ldmArgs = std::get<IntrLdmArgs>(instrArgs);
+        auto trace_data = std::make_shared<LsuTraceData>(num_threads);
+        trace->data = trace_data;
+        // TODO: for each lane t:
+        //   - call lsu_agu_addr to compute the per-lane address
+        //   - read the value from dcache (4 bytes)
+        //   - NaN-box result into rd_data[t]
+        // set rd_write = true
+      } break;
+      case LsuType::MST: {
+        auto ldmArgs = std::get<IntrLdmArgs>(instrArgs);
+        auto trace_data = std::make_shared<LsuTraceData>(num_threads);
+        trace->data = trace_data;
+        // TODO: for each lane t:
+        //   - call lsu_agu_addr to compute the per-lane address
+        //   - write the value to dcache (4 bytes)
       } break;
       default:
         std::abort();
@@ -1451,10 +1538,10 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
     }
   #endif // EXT_V_ENABLE
   #ifdef EXT_TCU_ENABLE
-    ,[&](TcuType tcu_type) {
-      auto tpuArgs = std::get<IntrTcuArgs>(instrArgs);
-      switch (tcu_type) {
+    ,[&](TcuType mat_type) {
+      switch (mat_type) {
       case TcuType::WMMA: {
+        auto tpuArgs = std::get<IntrTcuArgs>(instrArgs);
         auto trace_data = std::make_shared<TensorUnit::ExeTraceData>();
         trace->data = trace_data;
         assert(warp.tmask.count() == num_threads);

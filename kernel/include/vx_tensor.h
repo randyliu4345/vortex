@@ -176,8 +176,70 @@ public:
     });
   }
 
+  // Compile-time predicate: can we use the vx.ldm / vx.stm fast path for this fragment?
+  // Requirements: NR == 8, element size in {1,2,4,8} bytes, no sub-byte packing.
+  template <typename Frag>
+  static constexpr bool use_vx_ldm_stm() {
+#ifdef VX_LDM_STM_DISABLE
+    (void)sizeof(Frag);
+    return false;
+#else
+    return (Frag::NR == 8)
+        && !input_is_subbyte
+        && (sizeof(typename Frag::Type) == 1
+         || sizeof(typename Frag::Type) == 2
+         || sizeof(typename Frag::Type) == 4
+         || sizeof(typename Frag::Type) == 8);
+#endif
+  }
+
   template <mem_layout src_layout = row_major, typename Frag>
   static __attribute__((always_inline)) void load_matrix_sync(Frag &dst, const void *src, size_t ldm) {
+    // Fast path: emit vx.ldm (CUSTOM1, funct7=9) when NR==8. Fragment register bank is
+    // chosen to match the mma_sync ABI: f0-f7 for matrix_a, f10-f17 for matrix_b (NR=8),
+    // f24-f31 for accumulator (NR=8).
+    if constexpr (use_vx_ldm_stm<Frag>()) {
+      constexpr uint32_t es_val = __builtin_ctz(sizeof(typename Frag::Type));
+      constexpr uint32_t t_val  = (src_layout == col_major) ? 1 : 0;
+      constexpr uint32_t f3     = (es_val << 1) | t_val;
+      if constexpr (Frag::Use == matrix_a) {
+        register float ra0 asm("f0"), ra1 asm("f1"), ra2 asm("f2"), ra3 asm("f3");
+        register float ra4 asm("f4"), ra5 asm("f5"), ra6 asm("f6"), ra7 asm("f7");
+        __asm__ volatile (".insn r %[op], %[f3], 9, x0, %[base], %[ldm]"
+          : "=f"(ra0), "=f"(ra1), "=f"(ra2), "=f"(ra3),
+            "=f"(ra4), "=f"(ra5), "=f"(ra6), "=f"(ra7)
+          : [op]"i"(RISCV_CUSTOM1), [f3]"i"(f3),
+            [base]"r"(src), [ldm]"r"(ldm)
+          : "memory");
+        dst.data[0]=ra0; dst.data[1]=ra1; dst.data[2]=ra2; dst.data[3]=ra3;
+        dst.data[4]=ra4; dst.data[5]=ra5; dst.data[6]=ra6; dst.data[7]=ra7;
+        return;
+      } else if constexpr (Frag::Use == matrix_b) {
+        register float rb0 asm("f10"), rb1 asm("f11"), rb2 asm("f12"), rb3 asm("f13");
+        register float rb4 asm("f14"), rb5 asm("f15"), rb6 asm("f16"), rb7 asm("f17");
+        __asm__ volatile (".insn r %[op], %[f3], 9, x10, %[base], %[ldm]"
+          : "=f"(rb0), "=f"(rb1), "=f"(rb2), "=f"(rb3),
+            "=f"(rb4), "=f"(rb5), "=f"(rb6), "=f"(rb7)
+          : [op]"i"(RISCV_CUSTOM1), [f3]"i"(f3),
+            [base]"r"(src), [ldm]"r"(ldm)
+          : "memory");
+        dst.data[0]=rb0; dst.data[1]=rb1; dst.data[2]=rb2; dst.data[3]=rb3;
+        dst.data[4]=rb4; dst.data[5]=rb5; dst.data[6]=rb6; dst.data[7]=rb7;
+        return;
+      } else {
+        register float rc0 asm("f24"), rc1 asm("f25"), rc2 asm("f26"), rc3 asm("f27");
+        register float rc4 asm("f28"), rc5 asm("f29"), rc6 asm("f30"), rc7 asm("f31");
+        __asm__ volatile (".insn r %[op], %[f3], 9, x24, %[base], %[ldm]"
+          : "=f"(rc0), "=f"(rc1), "=f"(rc2), "=f"(rc3),
+            "=f"(rc4), "=f"(rc5), "=f"(rc6), "=f"(rc7)
+          : [op]"i"(RISCV_CUSTOM1), [f3]"i"(f3),
+            [base]"r"(src), [ldm]"r"(ldm)
+          : "memory");
+        dst.data[0]=rc0; dst.data[1]=rc1; dst.data[2]=rc2; dst.data[3]=rc3;
+        dst.data[4]=rc4; dst.data[5]=rc5; dst.data[6]=rc6; dst.data[7]=rc7;
+        return;
+      }
+    }
     uint32_t lane = vx_thread_id();
     if constexpr (Frag::Use == matrix_a) {
       // Load row-major matrix A
@@ -278,6 +340,28 @@ public:
   template <mem_layout dst_layout = row_major, typename Frag>
   static __attribute__((always_inline)) void store_matrix_sync(void *dst, const Frag &src, size_t ldm) {
     static_assert(Frag::Use == accumulator, "only accumulator fragment can be stored");
+    // Fast path: emit vx.stm (CUSTOM1, funct7=10) when NR==8. Accumulator lives in f24-f31.
+    if constexpr (use_vx_ldm_stm<Frag>()) {
+      constexpr uint32_t es_val = __builtin_ctz(sizeof(typename Frag::Type));
+      constexpr uint32_t t_val  = (dst_layout == col_major) ? 1 : 0;
+      constexpr uint32_t f3     = (es_val << 1) | t_val;
+      register float rc0 asm("f24") = src.data[0];
+      register float rc1 asm("f25") = src.data[1];
+      register float rc2 asm("f26") = src.data[2];
+      register float rc3 asm("f27") = src.data[3];
+      register float rc4 asm("f28") = src.data[4];
+      register float rc5 asm("f29") = src.data[5];
+      register float rc6 asm("f30") = src.data[6];
+      register float rc7 asm("f31") = src.data[7];
+      __asm__ volatile (".insn r %[op], %[f3], 10, x24, %[base], %[ldm]"
+        :
+        : [op]"i"(RISCV_CUSTOM1), [f3]"i"(f3),
+          [base]"r"(dst), [ldm]"r"(ldm),
+          "f"(rc0), "f"(rc1), "f"(rc2), "f"(rc3),
+          "f"(rc4), "f"(rc5), "f"(rc6), "f"(rc7)
+        : "memory");
+      return;
+    }
     uint32_t lane = vx_thread_id();
     uint32_t block_row = lane / cfg::tcN;
     uint32_t block_col = lane % cfg::tcN;

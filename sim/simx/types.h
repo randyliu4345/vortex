@@ -305,7 +305,9 @@ inline std::ostream &operator<<(std::ostream &os, const MdvType& type) {
 enum class LsuType {
   LOAD,
   STORE,
-  FENCE
+  FENCE,
+  MLD,   // vx.ldm — matrix LSU extension, load  (always available)
+  MST,   // vx.stm — matrix LSU extension, store (always available)
 };
 
 struct IntrLsuArgs {
@@ -314,11 +316,23 @@ struct IntrLsuArgs {
   uint32_t offset;
 };
 
+// vx.ldm / vx.stm macro args (LSU matrix extension).
+// Role (A/B/C) is derived at execute time from the fragment register index
+// (rd for MLD, rs3 for MST), matching the hardware VX_lsu_agu convention:
+//   0..9   -> matrix_a    10..17 -> matrix_b    24..31 -> accumulator
+struct IntrLdmArgs {
+  uint32_t es : 2;    // element-size log2 (0=8b,1=16b,2=32b,3=64b)
+  uint32_t t  : 1;    // transpose flag
+  uint32_t r  : 3;    // uop counter 0..7 (set by decoder per uop)
+};
+
 inline std::ostream &operator<<(std::ostream &os, const LsuType& type) {
   switch (type) {
   case LsuType::LOAD:   os << "LOAD"; break;
   case LsuType::STORE:  os << "STORE"; break;
   case LsuType::FENCE:  os << "FENCE"; break;
+  case LsuType::MLD:    os << "MLD"; break;
+  case LsuType::MST:    os << "MST"; break;
   default:
     assert(false);
   }
@@ -687,6 +701,7 @@ using IntrArgs = std::variant<
 , IntrBrArgs
 , IntrMdvArgs
 , IntrLsuArgs
+, IntrLdmArgs       // vx.ldm / vx.stm macro args (LSU matrix extension)
 , IntrAmoArgs
 , IntrFpuArgs
 , IntrCsrArgs

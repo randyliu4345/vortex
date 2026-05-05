@@ -321,10 +321,12 @@ package VX_gpu_pkg;
     localparam INST_LSU_LBU =    4'b0100;
     localparam INST_LSU_LHU =    4'b0101;
     localparam INST_LSU_LWU =    4'b0110; // new for RV64I LWU
+    localparam INST_LSU_MLD =    4'b0111; // vx.ldm (matrix load, LSU extension)
     localparam INST_LSU_SB =     4'b1000;
     localparam INST_LSU_SH =     4'b1001;
     localparam INST_LSU_SW =     4'b1010;
     localparam INST_LSU_SD =     4'b1011; // new for RV64I SD
+    localparam INST_LSU_MST =    4'b1100; // vx.stm (matrix store, LSU extension)
     localparam INST_LSU_FENCE =  4'b1111;
     localparam INST_LSU_BITS =   4;
 
@@ -341,7 +343,11 @@ package VX_gpu_pkg;
     endfunction
 
     function automatic logic inst_lsu_is_fence(input logic [INST_LSU_BITS-1:0] op);
-        return (op[3:2] == 3);
+        return (op == INST_LSU_FENCE);
+    endfunction
+
+    function automatic logic inst_lsu_is_mat(input logic [INST_LSU_BITS-1:0] op);
+        return (op == INST_LSU_MLD) || (op == INST_LSU_MST);
     endfunction
 
     ///////////////////////////////////////////////////////////////////////////
@@ -516,6 +522,19 @@ package VX_gpu_pkg;
     } lsu_args_t;
     `PACKAGE_ASSERT($bits(lsu_args_t) == INST_ARGS_BITS)
 
+    // Matrix load/store LSU extension (vx.ldm / vx.stm).
+    // Macro-level args at decode; the uop sequencer (VX_lsu_uops) stamps `r`
+    // per uop and VX_lsu_slice uses (es, t, r) + a role derived from the
+    // fragment register index (rd for ldm, rs2 for stm) to drive VX_lsu_agu.
+    //   0..9 -> matrix_a    10..17 -> matrix_b    24..31 -> accumulator
+    typedef struct packed {
+        logic [(INST_ARGS_BITS-2-1-3)-1:0] __padding;
+        logic [1:0] es;    // element-size log2 (0=8b,1=16b,2=32b,3=64b)
+        logic       t;     // transpose flag
+        logic [2:0] r;     // uop counter 0..7 (stamped by VX_lsu_uops)
+    } ldm_args_t;
+    `PACKAGE_ASSERT($bits(ldm_args_t) == INST_ARGS_BITS)
+
     typedef struct packed {
         logic [(INST_ARGS_BITS-1-`VX_CSR_ADDR_BITS-5)-1:0] __padding;
         logic use_imm;
@@ -545,6 +564,7 @@ package VX_gpu_pkg;
         alu_args_t  alu;
         fpu_args_t  fpu;
         lsu_args_t  lsu;
+        ldm_args_t  ldm;   // vx.ldm / vx.stm macro args (LSU extension)
         csr_args_t  csr;
         wctl_args_t wctl;
     `ifdef EXT_TCU_ENABLE

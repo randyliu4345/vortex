@@ -468,9 +468,9 @@ static op_string_t op_string(const Instr &instr) {
     }
   #endif // EXT_V_ENABLE
   #ifdef EXT_TCU_ENABLE
-    ,[&](TcuType tcu_type)-> op_string_t {
+    ,[&](TcuType mat_type)-> op_string_t {
       auto tpuArgs = std::get<IntrTcuArgs>(instrArgs);
-      return op_string(tcu_type, tpuArgs);
+      return op_string(mat_type, tpuArgs);
     }
   #endif // EXT_TCU_ENABLE
  );
@@ -1077,7 +1077,7 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       ibuffer.push_back(instr);
     } break;
   #ifdef EXT_TCU_ENABLE
-    case 2: {
+    case 2: { // WMMA block under EXT1 funct7=2
       switch (funct3) {
       case 0: { // WMMA
         namespace vt = vortex::tensor;
@@ -1120,6 +1120,25 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
   #endif
     default:
       std::abort();
+    }
+  } break;
+  case Opcode::EXT2: {
+    // Matrix LSU extension:
+    // CUSTOM1 (0x2B), vx.ldm (funct7=9), vx.stm (funct7=10).
+    // Each instruction expands into 8 LSU uops with LsuType::MLD or MST:
+    //   MLD uop: Integer rs1=base, Integer rs2=ldm, Float dest=reg0+r
+    //   MST uop: Integer rs1=base, Float rs2=reg0+r, Integer rs3=ldm
+    // The per-uop IntrLdmArgs carries es, t, and the counter r.
+    if (funct7 != 9 && funct7 != 10) std::abort();
+    uint32_t uuid_hi = (uuid >> 32) & 0xffffffff;
+    uint32_t uuid_lo = uuid & 0xffffffff;
+    uint32_t uuid_shift = 32 - 3; // top 3 bits carry r
+    for (uint32_t r = 0; r < 8; ++r) {
+      uint32_t uuid_lo_x = (r << uuid_shift) | uuid_lo;
+      uint64_t uuid_x = (static_cast<uint64_t>(uuid_hi) << 32) | uuid_lo_x;
+      auto instr = std::allocate_shared<Instr>(instr_pool_, uuid_x, FUType::LSU);
+      // TODO: set instruction opcode type, destination, source registers, args.
+      ibuffer.push_back(instr);
     }
   } break;
   default:

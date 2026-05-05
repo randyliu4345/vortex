@@ -14,9 +14,6 @@
 `include "VX_define.vh"
 
 module VX_uop_sequencer import
-`ifdef EXT_TCU_ENABLE
-    VX_tcu_pkg::*,
-`endif
     VX_gpu_pkg::*; (
     input clk,
     input reset,
@@ -31,27 +28,41 @@ module VX_uop_sequencer import
     wire uop_next = output_if.ready;
     wire uop_done;
 
+    // TODO: Detect vx.ldm / vx.stm instructions (matrix LSU extension).
+    // Hint: check ex_type == EX_LSU && inst_lsu_is_mat(op_type)
+    // Also handle EXT_TCU_ENABLE for WMMA, then set is_uop_input accordingly.
+    wire is_ldm_stm = 1'b0; // TODO: implement
+    wire is_wmma    = 1'b0; // TODO: implement (requires EXT_TCU_ENABLE guard)
+    assign is_uop_input = is_wmma || is_ldm_stm;
+
+    ibuffer_t wmma_uop_data;
+    // TODO: Instantiate VX_lsu_uops to expand each vx.ldm/vx.stm into 8 uops.
+    // For each uop r=0..7:
+    //   - Increment rd (MLD) or rs2 (MST) fragment register by r
+    //   - Stamp r into op_args.ldm.r
+    // Connect ldm_done and ldm_uop_data to the mux below.
+    ibuffer_t ldm_uop_data;
+    wire wmma_done;
+
 `ifdef EXT_TCU_ENABLE
-
-    assign is_uop_input = (input_if.data.ex_type == EX_TCU && input_if.data.op_type == INST_TCU_WMMA);
-
     VX_tcu_uops tcu_uops (
         .clk     (clk),
         .reset   (reset),
         .ibuf_in (input_if.data),
-        .ibuf_out(uop_data),
-        .start   (uop_start),
-        .next    (uop_next),
-        .done    (uop_done)
+        .ibuf_out(wmma_uop_data),
+        .start   (is_wmma && uop_start),
+        .next    (is_wmma && uop_next),
+        .done    (wmma_done)
     );
-
 `else
-
-    assign is_uop_input = 0;
-    assign uop_done = 0;
-    assign uop_data = '0;
-
+    assign wmma_uop_data = '0;
+    assign wmma_done     = 1'b0;
 `endif
+
+    // TODO: Instantiate VX_lsu_uops here and connect ldm_done, ldm_uop_data
+    wire ldm_done = 1'b0; // TODO: connect to VX_lsu_uops
+    assign uop_data = is_ldm_stm ? ldm_uop_data : wmma_uop_data;
+    assign uop_done = is_ldm_stm ? ldm_done : wmma_done;
 
     reg uop_active;
 
