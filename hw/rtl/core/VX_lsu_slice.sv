@@ -51,36 +51,41 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
         .data_t (lsu_res_t)
     ) result_no_rsp_if();
 
-    // TODO: Instantiate VX_lsu_agu to compute per-lane blocked addresses
-    // for vx.ldm / vx.stm (op_type == INST_LSU_MLD or INST_LSU_MST).
-    //
-    // The AGU takes: op_args.ldm{es,t,r}, rs1=base, rs2/rs3=ldm, rd[4:0]=frag reg
-    // and outputs per-lane addresses for each of NUM_LANES threads.
-    //
-    // Role is derived from rd[4:0]: <=9 → A, >=24 → C, else B
-    // Also: alias MLD→LW / MST→SW for width/fmt helpers,
-    //       gate mem_req_rw on op_type for matrix ops.
-    //
-    // TODO: insert your implementation here
+    wire req_is_fence, rsp_is_fence;
 
-        wire req_is_fence, rsp_is_fence;
+    // Matrix LSU extension (vx.ldm / vx.stm)
+    wire is_ldm = (execute_if.data.op_type == INST_LSU_MLD);
+    wire is_stm = (execute_if.data.op_type == INST_LSU_MST);
+    wire tile_mode = is_ldm || is_stm;
 
-    // TODO: detect matrix LSU ops and derive tile_mode, tile_role
-    // tile_mode = (op_type == INST_LSU_MLD) || (op_type == INST_LSU_MST)
-    // tile_role: derive from rd[4:0] (<=9 → 0=A, >=24 → 2=C, else 1=B)
-    wire tile_mode = 1'b0; // TODO: implement
-    wire [1:0] tile_role = 2'd0; // TODO: implement
+    // Role from fragment register index: <=9 -> A, >=24 -> C, else B
+    wire [4:0] frag_reg_idx = execute_if.data.rd[4:0];
+    wire [1:0] tile_role = (frag_reg_idx <= 5'd9)  ? 2'd0
+                        : (frag_reg_idx >= 5'd24) ? 2'd2
+                                                   : 2'd1;
 
     wire [NUM_LANES-1:0][`XLEN-1:0] full_addr;
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_full_addr
-        // Matrix LSU path: per-lane AGU computes the blocked address.
-        // Regular path: rs1_data + sext(offset).
-        // TODO: Compute per-lane blocked address using VX_lsu_agu.
-        // Instantiate VX_lsu_agu #(.LANE_IDX(i)) with role, es, t, r, base, ldm inputs.
-        // For non-matrix ops, use the standard offset-based address.
-        // TODO: select between tile address (from VX_lsu_agu) and normal offset address
-        assign full_addr[i] = execute_if.data.rs1_data[i] + `SEXT(`XLEN, execute_if.data.op_args.lsu.offset);
-        // TODO: replace with: tile_mode ? agu_addr[i] : (rs1_data[i] + offset)
+        wire [`XLEN-1:0] base_i = execute_if.data.rs1_data[i];
+        wire [`XLEN-1:0] ldm_i  = is_stm ? execute_if.data.rs3_data[i]
+                                         : execute_if.data.rs2_data[i];
+        wire [`XLEN-1:0] tile_addr_i;
+
+        VX_lsu_agu #(
+            .LANE_IDX (i)
+        ) lsu_agu (
+            .role (tile_role),
+            .es   (execute_if.data.op_args.ldm.es),
+            .t    (execute_if.data.op_args.ldm.t),
+            .r    (execute_if.data.op_args.ldm.r),
+            .base (base_i),
+            .ldm  (ldm_i),
+            .addr (tile_addr_i)
+        );
+
+        assign full_addr[i] = tile_mode
+                            ? tile_addr_i
+                            : (execute_if.data.rs1_data[i] + `SEXT(`XLEN, execute_if.data.op_args.lsu.offset));
     end
 
     // address type calculation
@@ -165,17 +170,16 @@ module VX_lsu_slice import VX_gpu_pkg::*; #(
                            && ~fence_lock;
 
     assign mem_req_mask = execute_if.data.tmask;
-    // For matrix LSU ops, the store-bit is encoded in the op_type;
-    // for regular ops, it's in op_args.lsu.is_store.
-    // TODO: gate mem_req_rw on tile_mode for matrix ops (MST=write, MLD=read)
-    assign mem_req_rw = execute_if.data.op_args.lsu.is_store; // TODO: handle tile_mode
+    // For matrix LSU ops, the store-bit is encoded in op_type (is_stm).
+    assign mem_req_rw = tile_mode ? is_stm : execute_if.data.op_args.lsu.is_store;
 
     // Matrix LSU ops always transfer one 32-bit word per lane (one fragment
     // register). Alias MLD/MST to LW/SW so the LSU's width/fmt helpers and
     // response-path sign-extension work unchanged.
     wire [INST_LSU_BITS-1:0] eff_op_type =
-        // TODO: alias MLD→LW and MST→SW for width/fmt helpers
-                 execute_if.data.op_type;
+                 is_ldm ? INST_LSU_LW
+               : is_stm ? INST_LSU_SW
+                        : execute_if.data.op_type;
 
     // address formatting
 

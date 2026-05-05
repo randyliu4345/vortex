@@ -537,6 +537,37 @@ module VX_decode import VX_gpu_pkg::*; #(
                     default:;
                 endcase
             end
+            INST_EXT2: begin
+                case (funct7)
+                    7'd9: begin // vx.ldm
+                        ex_type = EX_LSU;
+                        op_type = INST_OP_BITS'(INST_LSU_MLD);
+                        op_args.ldm = '0;
+                        op_args.ldm.es = funct3[2:1];
+                        op_args.ldm.t  = funct3[0];
+                        op_args.ldm.r  = 3'd0;
+                        `USED_IREG (rs1);
+                        `USED_IREG (rs2);
+                        `USED_FREG (rd);
+                    end
+                    7'd10: begin // vx.stm
+                        ex_type = EX_LSU;
+                        op_type = INST_OP_BITS'(INST_LSU_MST);
+                        op_args.ldm = '0;
+                        op_args.ldm.es = funct3[2:1];
+                        op_args.ldm.t  = funct3[0];
+                        op_args.ldm.r  = 3'd0;
+                        `USED_IREG (rs1);
+                        use_rs2 = 1;
+                        rs2_v = make_reg_num(REG_TYPE_F, rd);
+                        use_rs3 = 1;
+                        rs3_v = make_reg_num(REG_TYPE_I, rs2);
+                        // Keep fragment base register in rd for role derivation in LSU.
+                        rd_v = make_reg_num(REG_TYPE_F, rd);
+                    end
+                    default:;
+                endcase
+            end
             default:;
         endcase
     end
