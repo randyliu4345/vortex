@@ -1,0 +1,39 @@
+SimX 32x32x32
+LD_LIBRARY_PATH=/home/randyl/vortex/build/runtime: VORTEX_DRIVER=simx   ./sgemm_tcu
+matrix A: 32x32
+matrix B: 32x32
+matrix C: 32x32
+PERF: instrs=48036, cycles=42481, IPC=1.130764
+PASSED!
+
+SimX 64x64x64
+LD_LIBRARY_PATH=/home/randyl/vortex/build/runtime: VORTEX_DRIVER=simx   ./sgemm_tcu -m64 -n64 -k64
+matrix A: 64x64
+matrix B: 64x64
+matrix C: 64x64
+PERF: instrs=317732, cycles=202125, IPC=1.571958
+PASSED!
+
+SimX 128x128x128
+LD_LIBRARY_PATH=/home/randyl/vortex/build/runtime: VORTEX_DRIVER=simx   ./sgemm_tcu -m128 -n128 -k128
+matrix A: 128x128
+matrix B: 128x128
+matrix C: 128x128
+PERF: instrs=2357028, cycles=1437363, IPC=1.639828
+PASSED!
+
+rtlsim 32x32x32
+LD_LIBRARY_PATH=/home/randyl/vortex/build/runtime: VORTEX_DRIVER=rtlsim ./sgemm_tcu
+matrix A: 32x32
+matrix B: 32x32
+matrix C: 32x32
+PERF: instrs=42062, cycles=41128, IPC=1.022710
+PASSED!
+
+rtlsim 64x64x64
+LD_LIBRARY_PATH=/home/randyl/vortex/build/runtime: VORTEX_DRIVER=rtlsim ./sgemm_tcu -m64 -n64 -k64
+matrix A: 64x64
+matrix B: 64x64
+matrix C: 64x64
+PERF: instrs=193486, cycles=90371, IPC=2.141019
+PASSED!
