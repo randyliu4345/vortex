@@ -2,7 +2,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <vector>
+#include <chrono>
 #include <vortex.h>
+#include <VX_types.h>
 #include "common.h"
 
 #define FLOAT_ULP 6
@@ -130,6 +132,30 @@ void cleanup() {
   }
 }
 
+static uint64_t query_e2e_sim_cycles(vx_device_h dev) {
+  uint64_t num_cores = 0;
+  RT_CHECK(vx_dev_caps(dev, VX_CAPS_NUM_CORES, &num_cores));
+
+  uint64_t max_cycles = 0;
+  for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+    uint64_t cycles = 0;
+    RT_CHECK(vx_mpm_query(dev, 0, VX_CSR_MCYCLE, core_id, &cycles));
+    if (cycles > max_cycles) {
+      max_cycles = cycles;
+    }
+  }
+  return max_cycles;
+}
+
+static uint64_t host_cycle_counter() {
+#if defined(__x86_64__) || defined(__i386__)
+  return __builtin_ia32_rdtsc();
+#else
+  auto now = std::chrono::steady_clock::now().time_since_epoch();
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+#endif
+}
+
 void generate_random_graph(int num_nodes, int max_edges_per_node,
                            std::vector<Node> &nodes, std::vector<int> &edges) {
   nodes.resize(num_nodes);
@@ -252,6 +278,10 @@ int main(int argc, char *argv[]) {
 
   // BFS level-by-level dispatch
   std::cout << "start device" << std::endl;
+  uint64_t host_dev_begin = host_cycle_counter();
+  uint64_t e2e_cycles = 0;
+  uint64_t prev_cycles = 0;
+  uint32_t host_launches = 0;
   while (!h_frontier.empty()) {
     uint32_t frontier_size = (uint32_t)h_frontier.size();
 
@@ -267,6 +297,16 @@ int main(int argc, char *argv[]) {
     RT_CHECK(vx_max_occupancy_grid(device, 1, &frontier_size, grid_dim, block_dim));
     RT_CHECK(vx_start_g(device, krnl_buffer, args_buffer, 1, grid_dim, block_dim, 0));
     RT_CHECK(vx_ready_wait(device, VX_MAX_TIMEOUT));
+    ++host_launches;
+
+    auto cur_cycles = query_e2e_sim_cycles(device);
+    if (cur_cycles >= prev_cycles) {
+      e2e_cycles += (cur_cycles - prev_cycles);
+    } else {
+      // Runtime/simulator may reset counters between launches.
+      e2e_cycles += cur_cycles;
+    }
+    prev_cycles = cur_cycles;
 
     // compact next frontier on host
     RT_CHECK(vx_copy_from_dev(h_nextmask.data(), nextmask_buffer, 0, nextmask_buf_size));
@@ -279,8 +319,12 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  uint64_t host_dev_end = host_cycle_counter();
 
   // verify result
+  std::cout << "e2e_sim_cycles=" << e2e_cycles << std::endl;
+  std::cout << "e2e_host_device_cycles=" << (host_dev_end - host_dev_begin) << std::endl;
+  std::cout << "host_launches=" << host_launches << std::endl;
   std::cout << "verify result" << std::endl;
 
   // Run Golden Results

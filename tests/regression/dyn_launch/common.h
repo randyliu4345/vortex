@@ -9,6 +9,8 @@
 
 typedef struct {
   uint32_t role;
+  uint32_t launches_remaining;
+  uint32_t print_words;
   uint32_t _pad;
   uint64_t child_pc;
   uint64_t child_arg_addr;

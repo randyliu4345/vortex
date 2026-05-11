@@ -42,6 +42,7 @@ all:
 	$(MAKE) -C wgather
 	$(MAKE) -C wsync
 	$(MAKE) -C dyn_launch
+	$(MAKE) -C dyn_launch_v1
 
 run-simx:
 	$(MAKE) -C basic run-simx
@@ -78,6 +79,7 @@ run-simx:
 	$(MAKE) -C wgather run-simx
 	$(MAKE) -C wsync run-simx
 	$(MAKE) -C dyn_launch run-simx
+	$(MAKE) -C dyn_launch_v1 run-simx
 
 run-rtlsim:
 	$(MAKE) -C basic run-rtlsim
@@ -113,6 +115,7 @@ run-rtlsim:
 	$(MAKE) -C packld run-rtlsim
 	$(MAKE) -C wgather run-rtlsim
 	$(MAKE) -C wsync run-rtlsim
+	$(MAKE) -C dyn_launch_v1 run-rtlsim
 
 clean:
 	$(MAKE) -C basic clean
@@ -155,3 +158,4 @@ clean:
 	$(MAKE) -C wgather clean
 	$(MAKE) -C wsync clean
 	$(MAKE) -C dyn_launch clean
+	$(MAKE) -C dyn_launch_v1 clean
