@@ -211,6 +211,8 @@ int main(int argc, char* argv[]) {
   RT_CHECK(vx_copy_to_dev(cost_buffer, h_cost.data(), 0, cost_buf_size));
   RT_CHECK(vx_copy_to_dev(frontier_a_buffer, h_frontier0.data(), 0, sizeof(uint32_t)));
 
+  vx_e2e_eval_reset();
+
   std::cout << "upload program" << std::endl;
   RT_CHECK(vx_upload_kernel_file(device, kernel_file, &krnl_buffer));
   uint64_t child_pc = 0;

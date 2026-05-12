@@ -272,6 +272,8 @@ int main(int argc, char *argv[]) {
   RT_CHECK(vx_copy_to_dev(edges_buffer, h_edges.data(), 0, edges_buf_size));
   RT_CHECK(vx_copy_to_dev(cost_buffer,  h_cost.data(),  0, cost_buf_size));
 
+  vx_e2e_eval_reset();
+
   // upload program
   std::cout << "upload program" << std::endl;
   RT_CHECK(vx_upload_kernel_file(device, kernel_file, &krnl_buffer));

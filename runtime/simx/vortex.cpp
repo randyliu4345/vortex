@@ -28,6 +28,7 @@
 #include <stdlib.h>
 
 #include <VX_config.h>
+#include <vx_e2e_eval.h>
 #ifdef VM_ENABLE
 #include <malloc.h>
 
@@ -336,7 +337,10 @@ public:
 
   int start() {
     // DCRs already written by stub; just trigger execution
-    future_ = std::async(std::launch::async, [&] { processor_.run(); });
+    future_ = std::async(std::launch::async, [&] {
+      processor_.run();
+      vx_e2e_on_sim_run_end(processor_.last_run_sim_cycles());
+    });
     return 0;
   }
 

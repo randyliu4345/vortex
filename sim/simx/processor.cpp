@@ -14,6 +14,8 @@
 #include "processor.h"
 #include "processor_impl.h"
 
+#include <simobject.h>
+
 #include <cstdlib>
 #include <execinfo.h>
 
@@ -138,6 +140,8 @@ void ProcessorImpl::set_satp(uint64_t satp) {
 int ProcessorImpl::run() {
   this->reset();
   kmu_.start();
+  // SimPlatform::cycles() is 0 here; end-of-run value is recorded as last_run_sim_cycles_
+  // after the tick loop exits (final ebreak stops all clusters).
 
   bool done;
   int exitcode = 0;
@@ -154,6 +158,7 @@ int ProcessorImpl::run() {
     perf_mem_latency_ += perf_mem_pending_reads_;
   } while (!done);
 
+  last_run_sim_cycles_ = SimPlatform::instance().cycles();
   return exitcode;
 }
 
@@ -222,6 +227,10 @@ void Processor::attach_ram(RAM* mem) {
 
 void Processor::reset() {
   impl_->reset();
+}
+
+uint64_t Processor::last_run_sim_cycles() const {
+  return impl_->last_run_sim_cycles();
 }
 
 int Processor::run() {

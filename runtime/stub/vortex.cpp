@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #include <common.h>
+#include <vx_e2e_eval.h>
 
 #include <unistd.h>
 #include <string.h>
@@ -65,6 +66,7 @@ extern int vx_dev_open(vx_device_h* hdevice) {
 }
 
 extern int vx_dev_close(vx_device_h hdevice) {
+  vx_e2e_eval_finalize();
   vx_dump_perf(hdevice, stdout);
   int ret = (g_callbacks.dev_close)(hdevice);
   dlclose(g_drv_handle);
@@ -100,7 +102,11 @@ extern int vx_mem_info(vx_device_h hdevice, uint64_t* mem_free, uint64_t* mem_us
 }
 
 extern int vx_copy_to_dev(vx_buffer_h hbuffer, const void* host_ptr, uint64_t dst_offset, uint64_t size) {
-  return (g_callbacks.copy_to_dev)(hbuffer, host_ptr, dst_offset, size);
+  int ret = (g_callbacks.copy_to_dev)(hbuffer, host_ptr, dst_offset, size);
+  if (ret == 0 && size != 0) {
+    vx_e2e_record_pcie_copy(size);
+  }
+  return ret;
 }
 
 extern int vx_copy_from_dev(void* host_ptr, vx_buffer_h hbuffer, uint64_t src_offset, uint64_t size) {
@@ -148,7 +154,11 @@ extern int vx_start_g(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harg
   CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_KMU_WARP_STEP_Y, warp_step_y), { return err; });
   CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_KMU_WARP_STEP_Z, warp_step_z), { return err; });
 
-  return (g_callbacks.start)(hdevice);
+  int ret = (g_callbacks.start)(hdevice);
+  if (ret == 0) {
+    vx_e2e_record_pcie_launch();
+  }
+  return ret;
 }
 
 extern int vx_ready_wait(vx_device_h hdevice, uint64_t timeout) {

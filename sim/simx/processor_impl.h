@@ -52,6 +52,8 @@ public:
 
   Kmu& kmu() { return kmu_; }
 
+  uint64_t last_run_sim_cycles() const { return last_run_sim_cycles_; }
+
 private:
 
   const Arch& arch_;
@@ -63,6 +65,7 @@ private:
   uint64_t perf_mem_writes_;
   uint64_t perf_mem_latency_;
   uint64_t perf_mem_pending_reads_;
+  uint64_t last_run_sim_cycles_ = 0;
 };
 
 }

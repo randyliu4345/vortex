@@ -153,6 +153,10 @@ int vx_check_occupancy(vx_device_h hdevice, uint32_t block_size, uint32_t* max_l
 // performance counters
 int vx_dump_perf(vx_device_h hdevice, FILE* stream);
 
+// End-to-end SimX + modeled PCIe (enable with VORTEX_E2E_EVAL=1, optional VORTEX_E2E_EVAL_DIR)
+void vx_e2e_eval_reset(void);
+void vx_e2e_eval_finalize(void);
+
 #ifdef __cplusplus
 }
 #endif

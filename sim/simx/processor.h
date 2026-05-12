@@ -41,6 +41,9 @@ public:
 
   int dcr_read(uint32_t addr, uint32_t tag, uint32_t* value);
 
+  // SimPlatform cycle count at end of the last completed run() (0 before first run).
+  uint64_t last_run_sim_cycles() const;
+
 #ifdef VM_ENABLE
   bool is_satp_unset();
   uint8_t get_satp_mode();
