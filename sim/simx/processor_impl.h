@@ -50,6 +50,10 @@ public:
 
   PerfStats perf_stats() const;
 
+  // Zero processor-wide performance counters (DRAM + L3 + every cluster's
+  // L2 + every socket's L1 I/D caches). Cache state itself is untouched.
+  void reset_perf_stats();
+
   Kmu& kmu() { return kmu_; }
 
   uint64_t last_run_sim_cycles() const { return last_run_sim_cycles_; }

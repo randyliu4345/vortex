@@ -30,6 +30,7 @@ private:
 	MemCrossBar::Ptr mem_xbar_;
 	DramSim   dram_sim_;
 	mutable PerfStats perf_stats_;
+	uint64_t bank_stalls_baseline_;
 	struct DramCallbackArgs {
 		MemSim::Impl* memsim;
 		MemReq request;
@@ -41,6 +42,7 @@ public:
 		: simobject_(simobject)
 		, config_(config)
 		, dram_sim_(config.num_banks, config.block_size, config.clock_ratio)
+		, bank_stalls_baseline_(0)
 	{
 		char sname[100];
 		snprintf(sname, 100, "%s-xbar", simobject->name().c_str());
@@ -60,8 +62,13 @@ public:
 	}
 
 	const PerfStats& perf_stats() const {
-		perf_stats_.bank_stalls = mem_xbar_->collisions();
+		perf_stats_.bank_stalls = mem_xbar_->collisions() - bank_stalls_baseline_;
 		return perf_stats_;
+	}
+
+	void reset_perf_stats() {
+		perf_stats_ = PerfStats();
+		bank_stalls_baseline_ = mem_xbar_->collisions();
 	}
 
 	void reset() {
@@ -130,4 +137,8 @@ void MemSim::tick() {
 
 const MemSim::PerfStats &MemSim::perf_stats() const {
 	return impl_->perf_stats();
+}
+
+void MemSim::reset_perf_stats() {
+	impl_->reset_perf_stats();
 }

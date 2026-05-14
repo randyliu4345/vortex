@@ -48,6 +48,10 @@ public:
 
 	const PerfStats& perf_stats() const;
 
+	// Snapshot the underlying crossbar collision counter as the new
+	// "zero" so subsequent perf_stats() readouts represent deltas.
+	void reset_perf_stats();
+
 private:
 	class Impl;
 	Impl* impl_;

@@ -172,3 +172,9 @@ extern int vx_dcr_write(vx_device_h hdevice, uint32_t addr, uint32_t value) {
 extern int vx_dcr_read(vx_device_h hdevice, uint32_t addr, uint32_t tag, uint32_t* value) {
   return (g_callbacks.dcr_read)(hdevice, addr, tag, value);
 }
+
+extern int vx_perf_reset(vx_device_h hdevice) {
+  // The value bits are ignored by the simulator handler; we send 0 for
+  // forward-compat (could later be used as a per-class mask).
+  return vx_dcr_write(hdevice, VX_DCR_BASE_PERF_RESET, 0);
+}

@@ -173,6 +173,11 @@ Socket::PerfStats Socket::perf_stats() const {
   return perf_stats;
 }
 
+void Socket::reset_perf_stats() {
+  icaches_->reset_perf_stats();
+  dcaches_->reset_perf_stats();
+}
+
 int Socket::dcr_write(uint32_t addr, uint32_t value) {
   for (auto& core : cores_) {
     int ret = core->dcr_write(addr, value);

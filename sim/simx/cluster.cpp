@@ -202,6 +202,13 @@ Cluster::PerfStats Cluster::perf_stats() const {
   return perf_stats;
 }
 
+void Cluster::reset_perf_stats() {
+  l2cache_->reset_perf_stats();
+  for (auto& socket : sockets_) {
+    socket->reset_perf_stats();
+  }
+}
+
 int Cluster::dcr_write(uint32_t addr, uint32_t value) {
 #ifdef EXT_DXA_ENABLE
   if (addr >= VX_DCR_DXA_STATE_BEGIN && addr < VX_DCR_DXA_STATE_END) {

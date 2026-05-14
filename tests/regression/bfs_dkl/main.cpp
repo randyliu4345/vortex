@@ -23,9 +23,8 @@ uint32_t size = 1024;
 vx_device_h device = nullptr;
 vx_buffer_h nodes_buffer = nullptr;
 vx_buffer_h edges_buffer = nullptr;
+vx_buffer_h nextmask_buffer = nullptr;
 vx_buffer_h visit_buffer = nullptr;
-vx_buffer_h next_size_counter_buffer = nullptr;
-vx_buffer_h blocks_done_counter_buffer = nullptr;
 vx_buffer_h frontier_a_buffer = nullptr;
 vx_buffer_h frontier_b_buffer = nullptr;
 vx_buffer_h cost_buffer = nullptr;
@@ -34,7 +33,9 @@ vx_buffer_h parent_args_buffer = nullptr;
 vx_buffer_h child_args_buffer = nullptr;
 
 static void show_usage() {
-  std::cout << "Vortex BFS v2 (device-side level launches)." << std::endl;
+  std::cout << "BFS with device-side level launches (same kernel dataflow as "
+               "tests/regression/bfs; no atomic frontier / visit)."
+            << std::endl;
   std::cout << "Usage: [-k: kernel] [-n words] [-h: help]" << std::endl;
 }
 
@@ -54,9 +55,8 @@ void cleanup() {
   if (device) {
     if (nodes_buffer) vx_mem_free(nodes_buffer);
     if (edges_buffer) vx_mem_free(edges_buffer);
+    if (nextmask_buffer) vx_mem_free(nextmask_buffer);
     if (visit_buffer) vx_mem_free(visit_buffer);
-    if (next_size_counter_buffer) vx_mem_free(next_size_counter_buffer);
-    if (blocks_done_counter_buffer) vx_mem_free(blocks_done_counter_buffer);
     if (frontier_a_buffer) vx_mem_free(frontier_a_buffer);
     if (frontier_b_buffer) vx_mem_free(frontier_b_buffer);
     if (cost_buffer) vx_mem_free(cost_buffer);
@@ -163,49 +163,44 @@ int main(int argc, char* argv[]) {
   uint32_t num_nodes = size;
   uint32_t num_edges = edge_data.size();
 
-  uint32_t nodes_buf_size = num_nodes * sizeof(Node);
-  uint32_t edges_buf_size = num_edges * sizeof(int32_t);
-  uint32_t visit_buf_size = num_nodes * sizeof(uint32_t);
-  uint32_t next_size_counter_buf_size = sizeof(uint32_t);
-  uint32_t blocks_done_counter_buf_size = sizeof(uint32_t);
+  uint32_t nodes_buf_size    = num_nodes * sizeof(Node);
+  uint32_t edges_buf_size    = num_edges * sizeof(int32_t);
+  uint32_t nextmask_buf_size = num_nodes * sizeof(uint8_t);
+  uint32_t visit_buf_size    = num_nodes * sizeof(uint8_t);
   uint32_t frontier_buf_size = num_nodes * sizeof(uint32_t);
-  uint32_t cost_buf_size = num_nodes * sizeof(int32_t);
+  uint32_t cost_buf_size     = num_nodes * sizeof(int32_t);
 
   std::cout << "number of nodes: " << num_nodes << std::endl;
   std::cout << "allocate device memory" << std::endl;
   RT_CHECK(vx_mem_alloc(device, nodes_buf_size, VX_MEM_READ_WRITE, &nodes_buffer));
   RT_CHECK(vx_mem_alloc(device, edges_buf_size, VX_MEM_READ_WRITE, &edges_buffer));
+  RT_CHECK(vx_mem_alloc(device, nextmask_buf_size, VX_MEM_READ_WRITE, &nextmask_buffer));
   RT_CHECK(vx_mem_alloc(device, visit_buf_size, VX_MEM_READ_WRITE, &visit_buffer));
-  RT_CHECK(vx_mem_alloc(device, next_size_counter_buf_size, VX_MEM_READ_WRITE, &next_size_counter_buffer));
-  RT_CHECK(vx_mem_alloc(device, blocks_done_counter_buf_size, VX_MEM_READ_WRITE, &blocks_done_counter_buffer));
   RT_CHECK(vx_mem_alloc(device, frontier_buf_size, VX_MEM_READ_WRITE, &frontier_a_buffer));
   RT_CHECK(vx_mem_alloc(device, frontier_buf_size, VX_MEM_READ_WRITE, &frontier_b_buffer));
   RT_CHECK(vx_mem_alloc(device, cost_buf_size, VX_MEM_READ_WRITE, &cost_buffer));
 
-  uint64_t nodes_addr = 0, edges_addr = 0, visit_addr = 0, next_size_counter_addr = 0, blocks_done_counter_addr = 0;
+  uint64_t nodes_addr = 0, edges_addr = 0, nextmask_addr = 0, visit_addr = 0;
   uint64_t frontier_a_addr = 0, frontier_b_addr = 0, cost_addr = 0;
   RT_CHECK(vx_mem_address(nodes_buffer, &nodes_addr));
   RT_CHECK(vx_mem_address(edges_buffer, &edges_addr));
+  RT_CHECK(vx_mem_address(nextmask_buffer, &nextmask_addr));
   RT_CHECK(vx_mem_address(visit_buffer, &visit_addr));
-  RT_CHECK(vx_mem_address(next_size_counter_buffer, &next_size_counter_addr));
-  RT_CHECK(vx_mem_address(blocks_done_counter_buffer, &blocks_done_counter_addr));
   RT_CHECK(vx_mem_address(frontier_a_buffer, &frontier_a_addr));
   RT_CHECK(vx_mem_address(frontier_b_buffer, &frontier_b_addr));
   RT_CHECK(vx_mem_address(cost_buffer, &cost_addr));
 
-  std::vector<uint32_t> h_visit(num_nodes, 0);
-  std::vector<int32_t> h_cost(num_nodes, -1);
+  std::vector<uint8_t>  h_nextmask(num_nodes, 0);
+  std::vector<uint8_t>  h_visit(num_nodes, 0);
   std::vector<uint32_t> h_frontier0(1, 0);
-  uint32_t h_next_size_counter = 0;
-  uint32_t h_blocks_done_counter = 0;
+  std::vector<int32_t>  h_cost(num_nodes, -1);
   h_visit[0] = 1;
-  h_cost[0] = 0;
+  h_cost[0]  = 0;
 
   RT_CHECK(vx_copy_to_dev(nodes_buffer, node_data.data(), 0, nodes_buf_size));
   RT_CHECK(vx_copy_to_dev(edges_buffer, edge_data.data(), 0, edges_buf_size));
+  RT_CHECK(vx_copy_to_dev(nextmask_buffer, h_nextmask.data(), 0, nextmask_buf_size));
   RT_CHECK(vx_copy_to_dev(visit_buffer, h_visit.data(), 0, visit_buf_size));
-  RT_CHECK(vx_copy_to_dev(next_size_counter_buffer, &h_next_size_counter, 0, next_size_counter_buf_size));
-  RT_CHECK(vx_copy_to_dev(blocks_done_counter_buffer, &h_blocks_done_counter, 0, blocks_done_counter_buf_size));
   RT_CHECK(vx_copy_to_dev(cost_buffer, h_cost.data(), 0, cost_buf_size));
   RT_CHECK(vx_copy_to_dev(frontier_a_buffer, h_frontier0.data(), 0, sizeof(uint32_t)));
 
@@ -221,20 +216,19 @@ int main(int argc, char* argv[]) {
   RT_CHECK(vx_mem_address(child_args_buffer, &child_arg_addr));
 
   kernel_arg_t parent_arg = {};
-  parent_arg.role = BFSV2_ROLE_PARENT;
-  parent_arg.num_nodes = num_nodes;
-  parent_arg.num_edges = num_edges;
-  parent_arg.frontier_size = 1;
-  parent_arg.child_pc = child_pc;
-  parent_arg.child_arg_addr = child_arg_addr;
-  parent_arg.nodes_addr = nodes_addr;
-  parent_arg.edges_addr = edges_addr;
-  parent_arg.visit_addr = visit_addr;
-  parent_arg.next_size_counter_addr = next_size_counter_addr;
-  parent_arg.blocks_done_counter_addr = blocks_done_counter_addr;
-  parent_arg.frontier_a_addr = frontier_a_addr;
-  parent_arg.frontier_b_addr = frontier_b_addr;
-  parent_arg.cost_addr = cost_addr;
+  parent_arg.num_nodes          = num_nodes;
+  parent_arg.num_edges          = num_edges;
+  parent_arg.frontier_size      = 1;
+  parent_arg.nodes_addr         = nodes_addr;
+  parent_arg.edges_addr         = edges_addr;
+  parent_arg.nextmask_addr      = nextmask_addr;
+  parent_arg.visit_addr         = visit_addr;
+  parent_arg.frontier_addr      = frontier_a_addr;
+  parent_arg.cost_addr          = cost_addr;
+  parent_arg.role               = BFS_DKL_ROLE_PARENT;
+  parent_arg.child_pc           = child_pc;
+  parent_arg.child_arg_addr     = child_arg_addr;
+  parent_arg.frontier_next_addr = frontier_b_addr;
 
   std::cout << "start device" << std::endl;
   uint64_t host_dev_begin = host_cycle_counter();

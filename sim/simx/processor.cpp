@@ -176,6 +176,14 @@ int ProcessorImpl::dcr_write(uint32_t addr, uint32_t value) {
     kmu_.dcr_write(addr, value);
     return 0;
   }
+  // Performance counter reset request: bumps every perf counter we maintain
+  // at the processor scope (DRAM, L3, per-cluster L2, per-socket L1 I/D)
+  // back to zero so the next measurement window starts clean.
+  if (addr == VX_DCR_BASE_PERF_RESET) {
+    (void)value;
+    this->reset_perf_stats();
+    return 0;
+  }
   for (auto& cluster : clusters_) {
     int ret = cluster->dcr_write(addr, value);
     if (ret != 0)
@@ -201,6 +209,19 @@ ProcessorImpl::PerfStats ProcessorImpl::perf_stats() const {
   perf.l3cache     = l3cache_->perf_stats();
   perf.memsim      = memsim_->perf_stats();
   return perf;
+}
+
+void ProcessorImpl::reset_perf_stats() {
+  perf_mem_reads_ = 0;
+  perf_mem_writes_ = 0;
+  perf_mem_latency_ = 0;
+  // Note: perf_mem_pending_reads_ is mid-flight state, not a counter; do
+  // not zero it or in-flight responses would underflow the latency sum.
+  l3cache_->reset_perf_stats();
+  memsim_->reset_perf_stats();
+  for (auto& cluster : clusters_) {
+    cluster->reset_perf_stats();
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

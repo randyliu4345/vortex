@@ -153,6 +153,14 @@ int vx_check_occupancy(vx_device_h hdevice, uint32_t block_size, uint32_t* max_l
 // performance counters
 int vx_dump_perf(vx_device_h hdevice, FILE* stream);
 
+// Zero all device-side performance counters (per-core L1/L2/L3 caches and
+// DRAM) without touching cache contents. Intended to delimit measurement
+// windows so that, e.g., the compulsory fills from vx_copy_to_dev do not
+// contaminate per-phase metrics. Implemented as a write to
+// VX_DCR_BASE_PERF_RESET; safe to call between vx_ready_wait and the next
+// vx_start_*.
+int vx_perf_reset(vx_device_h hdevice);
+
 // End-to-end SimX + modeled PCIe (enable with VORTEX_E2E_EVAL=1, optional VORTEX_E2E_EVAL_DIR)
 void vx_e2e_eval_reset(void);
 void vx_e2e_eval_finalize(void);

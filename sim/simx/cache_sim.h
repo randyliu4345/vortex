@@ -73,6 +73,11 @@ public:
 
 	PerfStats perf_stats() const;
 
+	// Zero out all per-bank performance counters in-place without touching
+	// cache state (tags/LRU/MSHRs). Useful to delimit measurement windows
+	// (e.g. ignore the host->device upload's compulsory misses).
+	void reset_perf_stats();
+
 private:
 	class Impl;
 	Impl* impl_;

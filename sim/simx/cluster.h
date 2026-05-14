@@ -104,6 +104,9 @@ public:
 
   PerfStats perf_stats() const;
 
+  // Zero L1 (per-socket) and L2 (cluster-level) perf counters.
+  void reset_perf_stats();
+
   int dcr_write(uint32_t addr, uint32_t value);
 
   int dcr_read(uint32_t addr, uint32_t tag, uint32_t* value);

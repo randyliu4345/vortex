@@ -95,6 +95,12 @@ public:
 		return perf;
 	}
 
+	void reset_perf_stats() {
+		for (auto cache : caches_) {
+			cache->reset_perf_stats();
+		}
+	}
+
 private:
   std::vector<CacheSim::Ptr> caches_;
 };

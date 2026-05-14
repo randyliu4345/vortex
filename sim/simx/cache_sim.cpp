@@ -420,6 +420,12 @@ public:
     return perf_stats_;
   }
 
+  void reset_perf_stats() {
+    // Zero perf counters only; keep mid-flight pipeline accounting
+    // (pending_*, inflight_fills_) intact so we don't desync the bank.
+    perf_stats_ = CacheSim::PerfStats();
+  }
+
 private:
   void processInputs() {
     // first: schedule MSHR replay
@@ -688,7 +694,7 @@ private:
 class CacheSim::Impl {
 public:
   Impl(CacheSim *simobject, const Config &config)
-      : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports) {
+      : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports), bank_stalls_baseline_(0) {
     char sname[100];
 
     uint32_t num_banks = (1 << config.B);
@@ -817,9 +823,21 @@ public:
       for (const auto &bank : banks_) {
         perf_stats += bank->perf_stats();
       }
-      perf_stats.bank_stalls = bank_core_xbar_->collisions();
+      perf_stats.bank_stalls = bank_core_xbar_->collisions() - bank_stalls_baseline_;
     }
     return perf_stats;
+  }
+
+  void reset_perf_stats() {
+    if (config_.bypass)
+      return;
+    for (auto &bank : banks_) {
+      bank->reset_perf_stats();
+    }
+    // bank_core_xbar_->collisions() is read-only on MemCrossBar; the only
+    // honest way to zero it would be to re-create the crossbar. Instead we
+    // snapshot it here and subtract on subsequent perf_stats() queries.
+    bank_stalls_baseline_ = bank_core_xbar_->collisions();
   }
 
 private:
@@ -856,6 +874,7 @@ private:
   std::vector<MemArbiter::Ptr> nc_mem_arbs_;
   MemCrossBar::Ptr bank_core_xbar_;
   uint32_t init_cycles_;
+  uint64_t bank_stalls_baseline_;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -877,4 +896,8 @@ void CacheSim::tick() {
 
 CacheSim::PerfStats CacheSim::perf_stats() const {
   return impl_->perf_stats();
+}
+
+void CacheSim::reset_perf_stats() {
+  impl_->reset_perf_stats();
 }

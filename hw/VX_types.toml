@@ -11,7 +11,12 @@ VX_CSR_MPM_USER_H = 0xB83
 VX_DCR_BASE_STATE_BEGIN = 0x000
 VX_DCR_BASE_CACHE_FLUSH = 0x000
 VX_DCR_BASE_MPM_VALUE   = 0x001
-VX_DCR_BASE_STATE_END   = 0x002
+# Reset processor-side performance counters (per-core L1 + cluster L2 + L3 + DRAM).
+# Intended use: write any value from the host between distinct measurement
+# phases (e.g., Baseline vs Affinity SpMM runs) so that per-phase counters
+# are not contaminated by the initial vx_copy_to_dev fills.
+VX_DCR_BASE_PERF_RESET  = 0x002
+VX_DCR_BASE_STATE_END   = 0x003
 
 [dcr_kmu]
 VX_DCR_KMU_STATE_BEGIN  = 0x010

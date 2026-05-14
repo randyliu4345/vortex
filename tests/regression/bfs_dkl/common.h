@@ -8,26 +8,26 @@ struct Node {
   int no_of_edges;
 };
 
+// Same logical fields as tests/regression/bfs/common.h, plus device launch.
 typedef struct {
-  uint32_t role;
   uint32_t num_nodes;
   uint32_t num_edges;
   uint32_t frontier_size;
 
-  uint64_t child_pc;
-  uint64_t child_arg_addr;
-
   uint64_t nodes_addr;
   uint64_t edges_addr;
+  uint64_t nextmask_addr;
   uint64_t visit_addr;
-  uint64_t next_size_counter_addr;
-  uint64_t blocks_done_counter_addr;
-  uint64_t frontier_a_addr;
-  uint64_t frontier_b_addr;
+  uint64_t frontier_addr;
   uint64_t cost_addr;
+
+  uint32_t role;
+  uint64_t child_pc;
+  uint64_t child_arg_addr;
+  uint64_t frontier_next_addr;
 } kernel_arg_t;
 
-#define BFSV2_ROLE_PARENT 0u
-#define BFSV2_ROLE_WORKER 1u
+#define BFS_DKL_ROLE_PARENT 0u
+#define BFS_DKL_ROLE_WORKER 1u
 
 #endif

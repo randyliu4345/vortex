@@ -2,9 +2,6 @@
 #include <vx_launch.h>
 #include "common.h"
 
-#define BFSV2_ROLE_PARENT 0u
-#define BFSV2_ROLE_WORKER 1u
-
 // Worker CTA size: one CTA filling a full core (all warps × all lanes).
 // A single CTA is sufficient because the in-CTA atomics serialize fast,
 // and there is no need for cross-CTA coordination on the next-frontier
