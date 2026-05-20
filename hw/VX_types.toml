@@ -35,7 +35,10 @@ VX_DCR_KMU_BLOCK_SIZE   = 0x01B
 VX_DCR_KMU_WARP_STEP_X  = 0x01C
 VX_DCR_KMU_WARP_STEP_Y  = 0x01D
 VX_DCR_KMU_WARP_STEP_Z  = 0x01E
-VX_DCR_KMU_STATE_END    = 0x01F
+# Pin the host-launched kernel grid to a single core. VORTEX_AFFINITY_ANY
+# (0xFFFFFFFF) preserves the default load-balanced behavior.
+VX_DCR_KMU_CORE_AFFINITY= 0x01F
+VX_DCR_KMU_STATE_END    = 0x020
 
 # DXA descriptor DCR mapping
 # access pattern:

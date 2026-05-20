@@ -62,4 +62,30 @@ void vx_serial(vx_serial_cb callback, const void * arg);
 }
 #endif
 
+#ifdef __cplusplus
+#include <vx_launch.h>
+
+// Device-side dynamic launch helper: build a vx_kmu_launch_desc_t on the
+// stack pinned to a single core and submit it to the KMU. Equivalent to
+// the unaffine path when `core_id` == VORTEX_AFFINITY_ANY.
+//
+//   pc        kernel entry PC (typically obtained from the parent kernel arg)
+//   arg       kernel argument pointer (passed via MSCRATCH / __UNIFORM__ arg)
+//   grid_dim  3-element grid dimensions array
+//   block_dim 3-element block dimensions array
+//   lmem_size local-memory bytes per block
+//   core_id   global core_id to pin to, or VORTEX_AFFINITY_ANY for default
+//
+// Backward compatibility: callers that don't care about affinity should
+// keep using vx_kernel_launch + vx_launch_desc_init (defaults to ANY).
+static inline void vx_spawn_affine(uint64_t pc,
+                                   uint64_t arg,
+                                   const uint32_t grid_dim[3],
+                                   const uint32_t block_dim[3],
+                                   uint32_t lmem_size,
+                                   uint32_t core_id) {
+  vx_kernel_launch_affine(pc, arg, grid_dim, block_dim, lmem_size, core_id);
+}
+#endif
+
 #endif // __VX_SPAWN_H__

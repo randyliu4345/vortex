@@ -77,6 +77,12 @@ typedef void* vx_buffer_h;
 #define VX_MEM_READ_WRITE           0x3
 #define VX_MEM_PIN_MEMORY           0x4
 
+// Sentinel passed to vx_start_g_affine / vx_kernel_launch_affine to disable
+// pinning and request the default load-balanced HKS behavior.
+#ifndef VORTEX_AFFINITY_ANY
+#define VORTEX_AFFINITY_ANY         0xFFFFFFFFu
+#endif
+
 // open the device and connect to it
 int vx_dev_open(vx_device_h* hdevice);
 
@@ -116,6 +122,13 @@ int vx_start(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harguments);
 // Start device execution with grid
 int vx_start_g(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harguments,
                uint32_t ndim, const uint32_t* grid_dim, const uint32_t* block_dim, uint32_t lmem_size);
+
+// Start device execution with grid pinned to a specific core. Set
+// `core_affinity` to VORTEX_AFFINITY_ANY for default (load-balanced) behavior;
+// otherwise the entire grid is dispatched only to the given global core_id.
+int vx_start_g_affine(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harguments,
+                      uint32_t ndim, const uint32_t* grid_dim, const uint32_t* block_dim,
+                      uint32_t lmem_size, uint32_t core_affinity);
 
 // Return optimal grid/block dimensions for maximum occupancy given global work size
 int vx_max_occupancy_grid(vx_device_h hdevice, uint32_t ndim, const uint32_t* global_dim,

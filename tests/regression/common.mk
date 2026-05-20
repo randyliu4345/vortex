@@ -136,6 +136,14 @@ $(PROJECT): $(SRCS) $(VORTEX_RT_PATH)/libvortex.so $(CONFIG_STAMP)
 run-simx: $(PROJECT) kernel.vxbin
 	LD_LIBRARY_PATH=$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=simx ./$(PROJECT) $(OPTS)
 
+ifeq ($(REGRESSION_SIMX_ONLY),1)
+# Set REGRESSION_SIMX_ONLY := 1 before including this file for tests that only
+# apply under the simx model (e.g. core affinity pinning).
+.PHONY: run-rtlsim run-opae run-xrt
+run-rtlsim run-opae run-xrt:
+	@echo "$(SRC_DIR): simx-only; skipping $(subst run-,,$@)."
+else
+
 run-rtlsim: $(PROJECT) kernel.vxbin
 	LD_LIBRARY_PATH=$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=rtlsim ./$(PROJECT) $(OPTS)
 
@@ -149,6 +157,8 @@ else ifeq ($(TARGET), hw_emu)
 	SCOPE_JSON_PATH=$(FPGA_BIN_DIR)/scope.json XCL_EMULATION_MODE=$(TARGET) XRT_INI_PATH=$(VORTEX_RT_PATH)/xrt/xrt.ini EMCONFIG_PATH=$(FPGA_BIN_DIR) XRT_DEVICE_INDEX=$(XRT_DEVICE_INDEX) XRT_XCLBIN_PATH=$(FPGA_BIN_DIR)/vortex_afu.xclbin LD_LIBRARY_PATH=$(XILINX_XRT)/lib:$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=xrt ./$(PROJECT) $(OPTS)
 else
 	SCOPE_JSON_PATH=$(VORTEX_RT_PATH)/scope.json LD_LIBRARY_PATH=$(XILINX_XRT)/lib:$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=xrt ./$(PROJECT) $(OPTS)
+endif
+
 endif
 
 .depend: $(SRCS)

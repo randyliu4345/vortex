@@ -52,8 +52,10 @@ public:
   void warp_done(uint32_t wid);
 
   // True while CTAs remain to dispatch or active slots hold live warps.
+  // Cores not matching the kernel's affinity treat the KMU as idle so
+  // they can quiesce instead of busy-waiting on an unreachable grid.
   bool running() const {
-    return has_cta_ || has_pending_ || kmu_->running();
+    return has_cta_ || has_pending_ || kmu_->running_for_core(core_id_);
   }
 
 private:
@@ -61,6 +63,7 @@ private:
 
   Core*     core_;
   Kmu*      kmu_;
+  uint32_t  core_id_;
   uint32_t  num_threads_;
   uint32_t  num_warps_;
   uint64_t  lmem_base_;

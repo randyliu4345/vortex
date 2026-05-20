@@ -31,9 +31,13 @@ void Kmu::reset() {
   lmem_size_    = 0;
   block_size_   = 0;
   warp_step_[0] = warp_step_[1] = warp_step_[2] = 1;
+  // Reset to load-balanced behavior; the host bumps this via DCR before
+  // start() if a pinned launch was requested.
+  core_affinity_= KMU_AFFINITY_ANY;
   running_      = false;
   cta_id_       = 0;
   block_idx_[0] = block_idx_[1] = block_idx_[2] = 0;
+  pending_launches_.clear();
 }
 
 void Kmu::dcr_write(uint32_t addr, uint32_t value) {
@@ -53,6 +57,7 @@ void Kmu::dcr_write(uint32_t addr, uint32_t value) {
   case VX_DCR_KMU_WARP_STEP_X:   warp_step_[0] = value; break;
   case VX_DCR_KMU_WARP_STEP_Y:   warp_step_[1] = value; break;
   case VX_DCR_KMU_WARP_STEP_Z:   warp_step_[2] = value; break;
+  case VX_DCR_KMU_CORE_AFFINITY: core_affinity_= value; break;
   default: break;
   }
 }
@@ -74,16 +79,33 @@ void Kmu::arm_child(uint64_t pc,
                     const uint32_t block_dim[3],
                     uint32_t block_size,
                     const uint32_t warp_step[3],
-                    uint32_t lmem_size) {
-  PC_           = pc;
-  param_        = param;
+                    uint32_t lmem_size,
+                    uint32_t core_affinity) {
+  launch_state_t state;
+  state.pc            = pc;
+  state.param         = param;
+  state.block_size    = block_size;
+  state.lmem_size     = lmem_size;
+  state.core_affinity = core_affinity;
   for (int i = 0; i < 3; ++i) {
-    grid_dim_[i]  = grid_dim[i];
-    block_dim_[i] = block_dim[i];
-    warp_step_[i] = warp_step[i];
+    state.grid_dim[i]  = grid_dim[i];
+    state.block_dim[i] = block_dim[i];
+    state.warp_step[i] = warp_step[i];
   }
-  block_size_   = block_size;
-  lmem_size_    = lmem_size;
+  this->arm_child(state);
+}
+
+void Kmu::arm_child(const launch_state_t& state) {
+  PC_           = state.pc;
+  param_        = state.param;
+  for (int i = 0; i < 3; ++i) {
+    grid_dim_[i]  = state.grid_dim[i];
+    block_dim_[i] = state.block_dim[i];
+    warp_step_[i] = state.warp_step[i];
+  }
+  block_size_    = state.block_size;
+  lmem_size_     = state.lmem_size;
+  core_affinity_ = state.core_affinity;
   this->start();
 }
 
@@ -103,29 +125,47 @@ void Kmu::request_child_launch(uint64_t desc_addr, uint32_t core_id) {
 
 void Kmu::launch_child(uint64_t desc_addr, const mem_reader_t& mem_read) {
   // Layout must match vx_kmu_launch_desc_t in kernel/include/vx_launch.h.
-  uint64_t pc = 0, arg = 0;
-  uint32_t grid_dim[3], block_dim[3], warp_step[3];
-  uint32_t block_size = 0, lmem_size = 0;
+  launch_state_t state = {};
+  state.core_affinity = KMU_AFFINITY_ANY;
 
-  mem_read(&pc,         desc_addr + 0,  sizeof(uint64_t));
-  mem_read(&arg,        desc_addr + 8,  sizeof(uint64_t));
-  mem_read(grid_dim,    desc_addr + 16, sizeof(grid_dim));
-  mem_read(block_dim,   desc_addr + 28, sizeof(block_dim));
-  mem_read(&block_size, desc_addr + 40, sizeof(uint32_t));
-  mem_read(warp_step,   desc_addr + 44, sizeof(warp_step));
-  mem_read(&lmem_size,  desc_addr + 56, sizeof(uint32_t));
+  mem_read(&state.pc,            desc_addr + 0,  sizeof(uint64_t));
+  mem_read(&state.param,         desc_addr + 8,  sizeof(uint64_t));
+  mem_read(state.grid_dim,       desc_addr + 16, sizeof(state.grid_dim));
+  mem_read(state.block_dim,      desc_addr + 28, sizeof(state.block_dim));
+  mem_read(&state.block_size,    desc_addr + 40, sizeof(uint32_t));
+  mem_read(state.warp_step,      desc_addr + 44, sizeof(state.warp_step));
+  mem_read(&state.lmem_size,     desc_addr + 56, sizeof(uint32_t));
+  mem_read(&state.core_affinity, desc_addr + 60, sizeof(uint32_t));
 
-  // proof-of-life: parent must have drained its own grid before launching
-  assert(!running_ && "VX_CSR_KMU_LAUNCH written while KMU still running");
-  DP(3, "*** device kernel launch: pc=0x" << std::hex << pc
-     << ", arg=0x" << arg << std::dec
-     << ", grid=[" << grid_dim[0] << "," << grid_dim[1] << "," << grid_dim[2] << "]"
-     << ", block=[" << block_dim[0] << "," << block_dim[1] << "," << block_dim[2] << "]");
-  this->arm_child(pc, arg, grid_dim, block_dim, block_size, warp_step, lmem_size);
+  DP(3, "*** device kernel launch: pc=0x" << std::hex << state.pc
+     << ", arg=0x" << state.param << std::dec
+     << ", grid=[" << state.grid_dim[0] << "," << state.grid_dim[1] << "," << state.grid_dim[2] << "]"
+     << ", block=[" << state.block_dim[0] << "," << state.block_dim[1] << "," << state.block_dim[2] << "]"
+     << ", core_affinity=" << (state.core_affinity == KMU_AFFINITY_ANY
+                                 ? std::string("ANY")
+                                 : std::to_string(state.core_affinity)));
+
+  if (!running_ && pending_launches_.empty()) {
+    this->arm_child(state);
+  } else {
+    pending_launches_.push_back(state);
+  }
 }
 
-bool Kmu::step(kmu_req_t* req) {
-  if (!running_) return false;
+bool Kmu::step(uint32_t core_id, kmu_req_t* req) {
+  if (!running_) {
+    if (pending_launches_.empty())
+      return false;
+    const auto& state = pending_launches_.front();
+    if (state.core_affinity != KMU_AFFINITY_ANY && state.core_affinity != core_id)
+      return false;
+    this->arm_child(state);
+    pending_launches_.pop_front();
+  }
+  // Affinity gate: only the pinned core (if any) is allowed to dequeue.
+  // Other cores see the queue as empty even though it is still draining.
+  if (core_affinity_ != KMU_AFFINITY_ANY && core_affinity_ != core_id)
+    return false;
 
   req->PC           = PC_;
   req->param        = param_;

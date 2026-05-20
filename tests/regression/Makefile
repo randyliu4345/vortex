@@ -43,7 +43,9 @@ all:
 	$(MAKE) -C wgather
 	$(MAKE) -C wsync
 	$(MAKE) -C dyn_launch
+	$(MAKE) -C affinity
 	$(MAKE) -C dyn_launch_v1
+	$(MAKE) -C gnn_spmm
 
 run-simx:
 	$(MAKE) -C basic run-simx
@@ -81,7 +83,9 @@ run-simx:
 	$(MAKE) -C wgather run-simx
 	$(MAKE) -C wsync run-simx
 	$(MAKE) -C dyn_launch run-simx
+	$(MAKE) -C affinity run-simx
 	$(MAKE) -C dyn_launch_v1 run-simx
+	$(MAKE) -C gnn_spmm run-simx
 
 run-rtlsim:
 	$(MAKE) -C basic run-rtlsim
@@ -162,4 +166,6 @@ clean:
 	$(MAKE) -C wgather clean
 	$(MAKE) -C wsync clean
 	$(MAKE) -C dyn_launch clean
+	$(MAKE) -C affinity clean
 	$(MAKE) -C dyn_launch_v1 clean
+	$(MAKE) -C gnn_spmm clean

@@ -123,9 +123,29 @@ extern int vx_start(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h hargum
 
 extern int vx_start_g(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harguments,
                        uint32_t ndim, const uint32_t* grid_dim, const uint32_t* block_dim, uint32_t lmem_size) {
+  return vx_start_g_affine(hdevice, hkernel, harguments, ndim, grid_dim, block_dim,
+                           lmem_size, VORTEX_AFFINITY_ANY);
+}
+
+extern int vx_start_g_affine(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harguments,
+                              uint32_t ndim, const uint32_t* grid_dim, const uint32_t* block_dim,
+                              uint32_t lmem_size, uint32_t core_affinity) {
   uint64_t num_threads, num_warps;
   CHECK_ERR((g_callbacks.dev_caps)(hdevice, VX_CAPS_NUM_THREADS, &num_threads), { return err; });
   CHECK_ERR((g_callbacks.dev_caps)(hdevice, VX_CAPS_NUM_WARPS, &num_warps), { return err; });
+
+  // Validate the affinity request: any non-sentinel value must reference an
+  // existing core; otherwise the pinned grid would never be dispatched.
+  if (core_affinity != VORTEX_AFFINITY_ANY) {
+    uint64_t num_cores = 0;
+    CHECK_ERR((g_callbacks.dev_caps)(hdevice, VX_CAPS_NUM_CORES, &num_cores), { return err; });
+    if (core_affinity >= num_cores) {
+      std::cerr << "Error: core_affinity=" << core_affinity
+                << " out of range (num_cores=" << num_cores << ")" << std::endl;
+      return -1;
+    }
+  }
+
   uint32_t eff_block_dim[3], block_size, warp_step_x, warp_step_y, warp_step_z;
   prepare_kernel_launch_params(num_threads, num_warps, ndim, block_dim,
       eff_block_dim, &block_size, &warp_step_x, &warp_step_y, &warp_step_z);
@@ -153,6 +173,7 @@ extern int vx_start_g(vx_device_h hdevice, vx_buffer_h hkernel, vx_buffer_h harg
   CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_KMU_WARP_STEP_X, warp_step_x), { return err; });
   CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_KMU_WARP_STEP_Y, warp_step_y), { return err; });
   CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_KMU_WARP_STEP_Z, warp_step_z), { return err; });
+  CHECK_ERR(vx_dcr_write(hdevice, VX_DCR_KMU_CORE_AFFINITY, core_affinity), { return err; });
 
   int ret = (g_callbacks.start)(hdevice);
   if (ret == 0) {

@@ -24,6 +24,7 @@ using namespace vortex;
 CtaDispatcher::CtaDispatcher(Core* core)
   : core_(core)
   , kmu_(&core->socket()->cluster()->processor()->kmu())
+  , core_id_(core->id())
   , num_threads_(core->arch().num_threads())
   , num_warps_(core->arch().num_warps())
   , lmem_base_(core->arch().local_mem_base())
@@ -69,8 +70,10 @@ void CtaDispatcher::reset() {
 bool CtaDispatcher::step(const WarpMask& active_warps, uint32_t* wid_out, cta_warp_record_t* rec_out) {
   if (!has_cta_) {
     // Load next CTA: use stashed pending CTA if available, else request from KMU.
+    // The KMU enforces per-kernel core affinity; non-matching cores get
+    // false from step() and bail out without dequeuing.
     if (!has_pending_) {
-      if (!kmu_->step(&pending_cta_)) return false;
+      if (!kmu_->step(core_id_, &pending_cta_)) return false;
       has_pending_ = true;
     }
 
