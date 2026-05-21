@@ -86,4 +86,6 @@ The test compares **home** affinity (partition *i* on core *i*), **remote** pinn
 
 TOML knobs in `hw/VX_config.toml` (`[l2cache]`): `L2_MESH_ENABLE`, `L2_MESH_HOP_DELAY`, `L2_MESH_WIDTH`.
 
-`gnn_spmm` uses the same three KMU affinity modes (HOME / ANY / REMOTE) over 128 device-side mini launches; graph features are dense (not bank-confined), so L2 hop spread is dominated by CSR neighbor traffic. Use `VORTEX_MESH_STATS=1` with `--l2mesh` to print per-phase hop histograms on stderr.
+`gnn_spmm` uses the same three KMU affinity modes (HOME / ANY / REMOTE) over 128 device-side mini launches. For **per-socket private L2** (address home socket = `(addr >> L2_SOCKET_REGION_LOG2) % NUM_SOCKETS`, cross-socket mesh hops), build with `--l2socket` (and usually `--l2mesh`). Place each socket’s node features in its home region (`L2_SOCKET_REGION_LOG2=15` for the default 2048-node graph). Use `VORTEX_MESH_STATS=1` for per-phase socket-hop histograms on stderr.
+
+Shared-L2 `--l2mesh` models hops to **banks**; `--l2socket` models hops to **remote sockets’ L2**.

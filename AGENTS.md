@@ -88,7 +88,16 @@ CONFIGS="-DL2_ENABLE -DL2_MESH_ENABLE -DNUM_CORES=4 -DSOCKET_SIZE=1 -DL2_NUM_BAN
   ./ci/blackbox.sh --driver=simx --app=mesh_l2_affinity --cores=4 --l2cache --l2mesh
 ```
 
-GNN SpMM uses the same HOME / ANY / REMOTE KMU modes (128 device-side mini launches; long run):
+GNN SpMM uses the same HOME / ANY / REMOTE KMU modes (128 device-side mini launches; long run).
+
+Per-socket private L2 + socket mesh hops (`--l2socket`, usually with `--l2mesh`); features use socket-homed addresses (`gnn_layout.h`, `L2_SOCKET_REGION_LOG2=15`):
+
+```bash
+VORTEX_MESH_STATS=1 CONFIGS="-DL2_ENABLE -DL2_SOCKET_PRIVATE -DL2_MESH_ENABLE -DNUM_CORES=4" \
+  ./ci/blackbox.sh --driver=simx --app=gnn_spmm --cores=4 --l2cache --l2socket --l2mesh
+```
+
+Shared L2 bank mesh only (`--l2mesh` without `--l2socket`):
 
 ```bash
 VORTEX_MESH_STATS=1 CONFIGS="-DL2_ENABLE -DL2_MESH_ENABLE -DNUM_CORES=4 -DSOCKET_SIZE=1 -DL2_NUM_BANKS=4" \

@@ -215,12 +215,21 @@ ProcessorImpl::PerfStats ProcessorImpl::perf_stats() const {
 void ProcessorImpl::print_mesh_l2_stats(const char* tag) const {
   uint64_t h0 = 0, h1 = 0, h2 = 0, h3p = 0, hop_cycles = 0;
   for (const auto& cluster : clusters_) {
+#if L2_SOCKET_PRIVATE_ENABLED
+    const auto& fab = cluster->l2_fabric().perf_stats();
+    h0 += fab.mesh_reqs_hops0;
+    h1 += fab.mesh_reqs_hops1;
+    h2 += fab.mesh_reqs_hops2;
+    h3p += fab.mesh_reqs_hops3p;
+    hop_cycles += fab.mesh_hop_cycles;
+#else
     const auto& l2 = cluster->perf_stats().l2cache;
     h0 += l2.mesh_reqs_hops0;
     h1 += l2.mesh_reqs_hops1;
     h2 += l2.mesh_reqs_hops2;
     h3p += l2.mesh_reqs_hops3p;
     hop_cycles += l2.mesh_hop_cycles;
+#endif
   }
   const uint64_t total = h0 + h1 + h2 + h3p;
   if (total == 0 && hop_cycles == 0)

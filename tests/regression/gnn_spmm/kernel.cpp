@@ -6,6 +6,7 @@
 #include <vx_launch.h>
 #include <vx_intrinsics.h>
 #include "common.h"
+#include "gnn_layout.h"
 
 static void spmm_child_kernel(kernel_arg_t* arg) {
   const uint32_t lid  = threadIdx.x;
@@ -29,14 +30,17 @@ static void spmm_child_kernel(kernel_arg_t* arg) {
     const uint32_t e = row_ptr[v + 1];
     for (uint32_t k = s; k < e; ++k) {
       const uint32_t n = col_ind[k];
-      const float* nf = features_in + (uint64_t)n * F;
+      const auto* fin = reinterpret_cast<const uint8_t*>(features_in);
+      const float* nf = reinterpret_cast<const float*>(
+          fin + gnn_feature_byte_offset(n));
       #pragma GCC unroll 16
       for (uint32_t f = 0; f < F; ++f) {
         acc[f] += nf[f];
       }
     }
 
-    float* out = features_out + (uint64_t)v * F;
+    auto* fout = reinterpret_cast<uint8_t*>(features_out);
+    float* out = reinterpret_cast<float*>(fout + gnn_feature_byte_offset(v));
     #pragma GCC unroll 16
     for (uint32_t f = 0; f < F; ++f) {
       out[f] = acc[f];

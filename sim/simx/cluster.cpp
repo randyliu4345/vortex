@@ -41,8 +41,63 @@ Cluster::Cluster(const SimContext& ctx,
     sockets_.at(i) = Socket::Create(sname, socket_id, this, arch);
   }
 
-  // Create l2cache
+#if L2_SOCKET_PRIVATE_ENABLED
+  const uint32_t l2_per_socket =
+      (L2_CACHE_SIZE + sockets_per_cluster - 1) / sockets_per_cluster;
 
+  snprintf(sname, 100, "%s-l2fabric", name);
+  l2_fabric_ = L2SocketFabric::Create(
+      sname,
+      L2SocketFabric::Config{
+          sockets_per_cluster,
+          L1_MEM_PORTS,
+          (uint32_t)L2_SOCKET_REGION_LOG2,
+          (bool)(L2_ENABLED && L2_MESH_ENABLED),
+          (uint8_t)L2_MESH_WIDTH,
+          (uint8_t)L2_MESH_HOP_DELAY,
+      });
+
+  l2caches_.resize(sockets_per_cluster);
+  snprintf(sname, 100, "%s-l2mem_arb", name);
+  auto l2_mem_arb = MemArbiter::Create(
+      sname,
+      ArbiterType::RoundRobin,
+      sockets_per_cluster * L2_MEM_PORTS,
+      L2_MEM_PORTS);
+
+  for (uint32_t t = 0; t < sockets_per_cluster; ++t) {
+    snprintf(sname, 100, "%s-l2cache%d", name, t);
+    l2caches_.at(t) = CacheSim::Create(sname, CacheSim::Config{
+        !L2_ENABLED,
+        log2ceil(l2_per_socket),
+        log2ceil(MEM_BLOCK_SIZE),
+        log2ceil(L1_LINE_SIZE),
+        log2ceil(L2_NUM_WAYS),
+        log2ceil(L2_NUM_BANKS),
+        XLEN,
+        1,
+        L2_MEM_PORTS,
+        L2_WRITEBACK,
+        false,
+        L2_MSHR_SIZE,
+        2,
+        false,
+        0,
+        0,
+    });
+    for (uint32_t mp = 0; mp < L2_MEM_PORTS; ++mp) {
+      uint32_t arb_in = t * L2_MEM_PORTS + mp;
+      l2caches_.at(t)->mem_req_out.at(mp).bind(&l2_mem_arb->ReqIn.at(arb_in));
+      l2_mem_arb->RspOut.at(arb_in).bind(&l2caches_.at(t)->mem_rsp_in.at(mp));
+    }
+    l2_fabric_->l2_req_out.at(t).bind(&l2caches_.at(t)->core_req_in.at(0));
+    l2caches_.at(t)->core_rsp_out.at(0).bind(&l2_fabric_->l2_rsp_in.at(t));
+  }
+  for (uint32_t i = 0; i < L2_MEM_PORTS; ++i) {
+    l2_mem_arb->ReqOut.at(i).bind(&this->mem_req_out.at(i));
+    this->mem_rsp_in.at(i).bind(&l2_mem_arb->RspIn.at(i));
+  }
+#else
   snprintf(sname, 100, "%s-l2cache", name);
   l2cache_ = CacheSim::Create(sname, CacheSim::Config{
     !L2_ENABLED,
@@ -63,14 +118,16 @@ Cluster::Cluster(const SimContext& ctx,
     (uint8_t)L2_MESH_HOP_DELAY,
   });
 
-
-  // connect l2cache memory interface
   for (uint32_t i = 0; i < L2_MEM_PORTS; ++i) {
     l2cache_->mem_req_out.at(i).bind(&this->mem_req_out.at(i));
     this->mem_rsp_in.at(i).bind(&l2cache_->mem_rsp_in.at(i));
   }
+#endif
 
 #ifdef EXT_DXA_ENABLE
+#if L2_SOCKET_PRIVATE_ENABLED
+#error "L2_SOCKET_PRIVATE is not supported with EXT_DXA_ENABLE"
+#endif
   // Create DxaCore at cluster scope
   snprintf(sname, 100, "%s-dxa-core", name);
   dxa_core_ = DxaCore::Create(sname, this);
@@ -108,8 +165,14 @@ Cluster::Cluster(const SimContext& ctx,
     }
   }
 
+#elif L2_SOCKET_PRIVATE_ENABLED
+  for (uint32_t i = 0; i < sockets_per_cluster; ++i) {
+    for (uint32_t j = 0; j < L1_MEM_PORTS; ++j) {
+      sockets_.at(i)->mem_req_out.at(j).bind(&l2_fabric_->socket_req_in.at(i).at(j));
+      l2_fabric_->socket_rsp_out.at(i).at(j).bind(&sockets_.at(i)->mem_rsp_in.at(j));
+    }
+  }
 #else
-  // connect l2cache core interface
   for (uint32_t i = 0; i < sockets_per_cluster; ++i) {
     for (uint32_t j = 0; j < L1_MEM_PORTS; ++j) {
       sockets_.at(i)->mem_req_out.at(j).bind(&l2cache_->core_req_in.at(i * L1_MEM_PORTS + j));
@@ -198,7 +261,13 @@ void Cluster::global_barrier_arrive(uint32_t bar_id, uint32_t count, uint32_t co
 
 Cluster::PerfStats Cluster::perf_stats() const {
   PerfStats perf_stats;
+#if L2_SOCKET_PRIVATE_ENABLED
+  for (const auto& l2 : l2caches_) {
+    perf_stats.l2cache += l2->perf_stats();
+  }
+#else
   perf_stats.l2cache = l2cache_->perf_stats();
+#endif
 #ifdef EXT_DXA_ENABLE
   perf_stats.dxa = dxa_core_->perf_stats();
 #endif
@@ -206,7 +275,14 @@ Cluster::PerfStats Cluster::perf_stats() const {
 }
 
 void Cluster::reset_perf_stats() {
+#if L2_SOCKET_PRIVATE_ENABLED
+  for (auto& l2 : l2caches_) {
+    l2->reset_perf_stats();
+  }
+  l2_fabric_->reset_perf_stats();
+#else
   l2cache_->reset_perf_stats();
+#endif
   for (auto& socket : sockets_) {
     socket->reset_perf_stats();
   }

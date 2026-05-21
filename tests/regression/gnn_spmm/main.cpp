@@ -21,6 +21,7 @@
 #include <VX_types.h>
 #include "common.h"
 #include "../../../gnn_data.h"
+#include "gnn_layout.h"
 
 #define RT_CHECK(_expr)                                          \
   do {                                                           \
@@ -299,7 +300,8 @@ static void compute_reference(std::vector<float>& out) {
     float acc[GNN_FEATURE_DIM] = {0.0f};
     for (uint32_t k = s; k < e; ++k) {
       uint32_t n = col_ind[k];
-      const float* nf = &node_features[n * GNN_FEATURE_DIM];
+      const float* nf =
+          &node_features[n * GNN_FEATURE_DIM]; /* host layout linear */
       for (uint32_t f = 0; f < GNN_FEATURE_DIM; ++f) acc[f] += nf[f];
     }
     for (uint32_t f = 0; f < GNN_FEATURE_DIM; ++f) {
@@ -387,7 +389,22 @@ int main(int argc, char** argv) {
   std::cout << "upload graph + features + mini-partition tables" << std::endl;
   RT_CHECK(vx_copy_to_dev(row_ptr_buffer,     row_ptr,        0, row_ptr_bytes));
   RT_CHECK(vx_copy_to_dev(col_ind_buffer,     col_ind,        0, col_ind_bytes));
-  RT_CHECK(vx_copy_to_dev(features_in_buffer, node_features,  0, features_in_bytes));
+  {
+    const uint64_t region_bytes = 1ull << GNN_SOCKET_REGION_LOG2;
+    for (uint32_t v = 0; v < GNN_NUM_NODES; ++v) {
+      const uint64_t off = gnn_feature_byte_offset(v);
+      RT_CHECK(vx_copy_to_dev(features_in_buffer,
+                              &node_features[v * GNN_FEATURE_DIM],
+                              off,
+                              GNN_FEATURE_DIM * sizeof(float)));
+    }
+    const uint64_t features_span =
+        region_bytes * GNN_NUM_PHYSICAL_CORES;
+    if (features_span > features_in_bytes) {
+      std::cerr << "Warning: socket-homed features span " << features_span
+                << " exceeds alloc " << features_in_bytes << "\n";
+    }
+  }
   RT_CHECK(vx_copy_to_dev(mini_start_buffer,  mini_partition_start_node, 0, mini_tbl_bytes));
   RT_CHECK(vx_copy_to_dev(mini_end_buffer,    mini_partition_end_node,   0, mini_tbl_bytes));
   RT_CHECK(vx_copy_to_dev(mini_aff_buffer,    mini_partition_core_affinity, 0, mini_tbl_bytes));
@@ -533,8 +550,13 @@ int main(int argc, char** argv) {
   if (verify_result) {
     std::cout << "verify result" << std::endl;
     std::vector<float> dev_out(GNN_NUM_NODES * GNN_FEATURE_DIM, 0.0f);
-    RT_CHECK(vx_copy_from_dev(dev_out.data(), features_out_buffer, 0,
-                              features_out_bytes));
+    for (uint32_t v = 0; v < GNN_NUM_NODES; ++v) {
+      const uint64_t off = gnn_feature_byte_offset(v);
+      RT_CHECK(vx_copy_from_dev(&dev_out[v * GNN_FEATURE_DIM],
+                               features_out_buffer,
+                               off,
+                               GNN_FEATURE_DIM * sizeof(float)));
+    }
 
     std::vector<float> ref;
     compute_reference(ref);
