@@ -110,6 +110,9 @@ public:
   // Zero L1 (per-socket) and L2 (cluster-level) perf counters.
   void reset_perf_stats();
 
+  // Configure L2 bank mapping policy for this cluster.
+  void set_l2_bank_policy(bool coarse_mode, uint8_t coarse_page_log2);
+
   int dcr_write(uint32_t addr, uint32_t value);
 
   int dcr_read(uint32_t addr, uint32_t tag, uint32_t* value);

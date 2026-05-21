@@ -14,6 +14,7 @@
 #include "cache_sim.h"
 #include "debug.h"
 #include "types.h"
+#include <VX_config.h>
 #include <list>
 #include <queue>
 #include <unordered_map>
@@ -695,6 +696,9 @@ class CacheSim::Impl {
 public:
   Impl(CacheSim *simobject, const Config &config)
       : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports), bank_stalls_baseline_(0), mesh_hop_cycles_(0), mesh_reqs_hops0_(0), mesh_reqs_hops1_(0), mesh_reqs_hops2_(0), mesh_reqs_hops3p_(0) {
+    num_banks_ = 1u << config_.B;
+    coarse_mapping_mode_ = config_.coarse_mapping_mode;
+    coarse_page_log2_ = config_.coarse_page_log2 ? config_.coarse_page_log2 : 16;
     mesh_enabled_ = config_.mesh_enable;
     mesh_width_ = config_.mesh_width ? config_.mesh_width : 1;
     mesh_hop_delay_ = config_.mesh_hop_delay;
@@ -705,7 +709,7 @@ public:
     mesh_height_ = mesh_enabled_ ? (mesh_nodes_ / mesh_width_) : 1;
     char sname[100];
 
-    uint32_t num_banks = (1 << config.B);
+    uint32_t num_banks = num_banks_;
 
     if (config_.bypass) {
       snprintf(sname, 100, "%s-bypass_arb", simobject->name().c_str());
@@ -747,7 +751,7 @@ public:
     snprintf(sname, 100, "%s-core_xbar", simobject->name().c_str());
     bank_core_xbar_ = MemCrossBar::Create(sname, ArbiterType::RoundRobin, config_.num_inputs, num_banks,
                                           [&](const MemCrossBar::ReqType &req) {
-                                            return params_.addr_bank_id(req.addr);
+                                            return this->addr_bank_id(req.addr);
                                           });
 
     // Create cache banks
@@ -827,10 +831,10 @@ public:
           core_req_in.pop();
         }
       } else {
-        uint32_t req_delay = mesh_delay(req_id, core_req.addr);
+        uint32_t req_delay = mesh_delay(core_req.cid, core_req.addr);
         if (mesh_enabled_) {
-          uint32_t bank = params_.addr_bank_id(core_req.addr);
-          uint32_t hops = mesh_hops(mesh_node(req_id), mesh_node(bank));
+          uint32_t bank = addr_bank_id(core_req.addr);
+          uint32_t hops = mesh_hops(mesh_node(core_req.cid), mesh_node(bank));
           if (hops == 0)
             ++mesh_reqs_hops0_;
           else if (hops == 1)
@@ -885,7 +889,27 @@ public:
     bank_stalls_baseline_ = bank_core_xbar_->collisions();
   }
 
+  void set_bank_mapping(bool coarse_mode, uint8_t coarse_page_log2) {
+    coarse_mapping_mode_ = coarse_mode;
+    coarse_page_log2_ = coarse_page_log2 ? coarse_page_log2 : 16;
+  }
+
 private:
+
+  uint32_t addr_bank_id(uint64_t addr) const {
+    if (!coarse_mapping_mode_)
+      return params_.addr_bank_id(addr);
+    // Coarse mapping keeps all addresses in one page window on one bank:
+    // bank_id = floor((addr - USER_BASE_ADDR) / page_size) mod num_banks.
+    // Normalizing by USER_BASE_ADDR removes allocator base-page rotation so
+    // page 0 in the user allocation space maps to bank 0 by default.
+    uint32_t page_log2 = coarse_page_log2_;
+    if (page_log2 < config_.L)
+      page_log2 = config_.L;
+    uint64_t normalized_addr = (addr >= USER_BASE_ADDR) ? (addr - USER_BASE_ADDR) : addr;
+    uint64_t page_id = (normalized_addr >> page_log2);
+    return static_cast<uint32_t>(page_id % num_banks_);
+  }
 
   bool processBypassResponse(const MemRsp &mem_rsp) {
     // core response backpressure check
@@ -923,11 +947,11 @@ private:
     return (sx > dx ? sx - dx : dx - sx) + (sy > dy ? sy - dy : dy - sy);
   }
 
-  uint32_t mesh_delay(uint32_t src_id, uint64_t addr) const {
+  uint32_t mesh_delay(uint32_t src_cid, uint64_t addr) const {
     if (!mesh_enabled_)
       return 0;
-    uint32_t bank = params_.addr_bank_id(addr);
-    return mesh_hops(mesh_node(src_id), mesh_node(bank)) * mesh_hop_delay_;
+    uint32_t bank = addr_bank_id(addr);
+    return mesh_hops(mesh_node(src_cid), mesh_node(bank)) * mesh_hop_delay_;
   }
 
   CacheSim *const simobject_;
@@ -939,6 +963,9 @@ private:
   MemCrossBar::Ptr bank_core_xbar_;
   uint32_t init_cycles_;
   uint64_t bank_stalls_baseline_;
+  bool coarse_mapping_mode_;
+  uint8_t coarse_page_log2_;
+  uint32_t num_banks_;
   bool mesh_enabled_;
   uint32_t mesh_width_;
   uint32_t mesh_height_;
@@ -975,4 +1002,8 @@ CacheSim::PerfStats CacheSim::perf_stats() const {
 
 void CacheSim::reset_perf_stats() {
   impl_->reset_perf_stats();
+}
+
+void CacheSim::set_bank_mapping(bool coarse_mode, uint8_t coarse_page_log2) {
+  impl_->set_bank_mapping(coarse_mode, coarse_page_log2);
 }

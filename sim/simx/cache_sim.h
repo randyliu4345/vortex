@@ -37,6 +37,8 @@ public:
 		bool    mesh_enable;    // L2 mesh hop latency (simx)
 		uint8_t mesh_width;     // mesh columns (banks / width = rows)
 		uint8_t mesh_hop_delay; // extra cycles per Manhattan hop
+		bool    coarse_mapping_mode; // page-granular bank mapping enable
+		uint8_t coarse_page_log2;    // page size = 1 << coarse_page_log2
 	};
 
 	struct PerfStats {
@@ -90,6 +92,11 @@ public:
 	// cache state (tags/LRU/MSHRs). Useful to delimit measurement windows
 	// (e.g. ignore the host->device upload's compulsory misses).
 	void reset_perf_stats();
+
+	// Runtime L2 bank mapping control:
+	// mode=0 -> fine-grained line interleaving (default)
+	// mode=1 -> coarse page-granular interleaving.
+	void set_bank_mapping(bool coarse_mode, uint8_t coarse_page_log2);
 
 private:
 	class Impl;

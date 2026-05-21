@@ -16,7 +16,9 @@ VX_DCR_BASE_MPM_VALUE   = 0x001
 # phases (e.g., Baseline vs Affinity SpMM runs) so that per-phase counters
 # are not contaminated by the initial vx_copy_to_dev fills.
 VX_DCR_BASE_PERF_RESET  = 0x002
-VX_DCR_BASE_STATE_END   = 0x003
+# L2 bank policy (bit0=coarse_mode, bits[7:1]=coarse_page_log2).
+VX_DCR_BASE_L2_BANK_POLICY = 0x003
+VX_DCR_BASE_STATE_END   = 0x004
 
 [dcr_kmu]
 VX_DCR_KMU_STATE_BEGIN  = 0x010

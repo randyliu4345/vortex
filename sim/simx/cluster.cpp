@@ -84,6 +84,8 @@ Cluster::Cluster(const SimContext& ctx,
         false,
         0,
         0,
+        false,
+        0,
     });
     for (uint32_t mp = 0; mp < L2_MEM_PORTS; ++mp) {
       uint32_t arb_in = t * L2_MEM_PORTS + mp;
@@ -116,6 +118,8 @@ Cluster::Cluster(const SimContext& ctx,
     (bool)(L2_ENABLED && L2_MESH_ENABLED), // mesh_enable
     (uint8_t)L2_MESH_WIDTH,
     (uint8_t)L2_MESH_HOP_DELAY,
+    false,                  // coarse bank mapping
+    0,                      // coarse page log2 (runtime-programmable)
   });
 
   for (uint32_t i = 0; i < L2_MEM_PORTS; ++i) {
@@ -286,6 +290,16 @@ void Cluster::reset_perf_stats() {
   for (auto& socket : sockets_) {
     socket->reset_perf_stats();
   }
+}
+
+void Cluster::set_l2_bank_policy(bool coarse_mode, uint8_t coarse_page_log2) {
+#if L2_SOCKET_PRIVATE_ENABLED
+  for (auto& l2 : l2caches_) {
+    l2->set_bank_mapping(coarse_mode, coarse_page_log2);
+  }
+#else
+  l2cache_->set_bank_mapping(coarse_mode, coarse_page_log2);
+#endif
 }
 
 int Cluster::dcr_write(uint32_t addr, uint32_t value) {

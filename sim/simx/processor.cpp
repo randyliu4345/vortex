@@ -75,6 +75,7 @@ ProcessorImpl::ProcessorImpl(const Arch& arch)
     L3_MSHR_SIZE,             // mshr size
     2,                        // pipeline latency
     false, 0, 0,              // mesh (L2 only)
+    false, 0,                 // coarse bank mapping (L2 only)
   });
 
   // connect L3 core interfaces
@@ -183,6 +184,16 @@ int ProcessorImpl::dcr_write(uint32_t addr, uint32_t value) {
   if (addr == VX_DCR_BASE_PERF_RESET) {
     (void)value;
     this->reset_perf_stats();
+    return 0;
+  }
+  if (addr == VX_DCR_BASE_L2_BANK_POLICY) {
+    const bool coarse_mode = (value & 0x1u) != 0;
+    uint8_t coarse_page_log2 = static_cast<uint8_t>((value >> 1) & 0x7fu);
+    if (coarse_page_log2 == 0)
+      coarse_page_log2 = 16; // default coarse window: 64KB pages
+    for (auto& cluster : clusters_) {
+      cluster->set_l2_bank_policy(coarse_mode, coarse_page_log2);
+    }
     return 0;
   }
   for (auto& cluster : clusters_) {

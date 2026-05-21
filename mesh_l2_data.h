@@ -4,9 +4,10 @@
 
 #include <stdint.h>
 
+#define MESH_L2_DENSE_LAYOUT 1U
 #define MESH_L2_NUM_PARTITIONS 4U
 #define MESH_L2_PARTITION_SIZE_BYTES 32768U
-#define MESH_L2_PARTITION_SPAN_BYTES 131072U
+#define MESH_L2_PARTITION_SPAN_BYTES 32768U
 #define MESH_L2_FLOATS_PER_PARTITION 8192U
 #define MESH_L2_NUM_GRANULES 512U
 #define MESH_L2_FLOATS_PER_GRANULE 16U
@@ -16,16 +17,14 @@
 #define MESH_L2_BANK_SELECT_BIT_END 7U
 
 static inline uint64_t mesh_l2_elem_byte_offset(uint32_t elem_index) {
-  const uint32_t g = elem_index >> 4;
-  const uint32_t f = elem_index & 15u;
-  return (uint64_t)g * 256u + (uint64_t)f * 4u;
+  return (uint64_t)elem_index * 4u;
 }
 
 static const uint64_t mesh_l2_partition_base[4] = {
   0ull,
-  131136ull,
-  262272ull,
-  393408ull
+  65600ull,
+  131200ull,
+  196800ull
 };
 
 static const uint32_t mesh_l2_partition_home_core[4] = {
