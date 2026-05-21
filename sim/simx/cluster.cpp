@@ -58,6 +58,9 @@ Cluster::Cluster(const SimContext& ctx,
     false,                  // write response
     L2_MSHR_SIZE,           // mshr size
     2,                      // pipeline latency
+    (bool)(L2_ENABLED && L2_MESH_ENABLED), // mesh_enable
+    (uint8_t)L2_MESH_WIDTH,
+    (uint8_t)L2_MESH_HOP_DELAY,
   });
 
 

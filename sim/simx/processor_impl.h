@@ -58,6 +58,9 @@ public:
 
   uint64_t last_run_sim_cycles() const { return last_run_sim_cycles_; }
 
+  // Print aggregated L2 mesh hop histogram (stderr). No-op if mesh disabled.
+  void print_mesh_l2_stats(const char* tag) const;
+
 private:
 
   const Arch& arch_;

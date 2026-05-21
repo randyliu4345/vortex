@@ -34,6 +34,9 @@ public:
 		bool    write_reponse;  // enable write response
 		uint16_t mshr_size;     // MSHR buffer size
 		uint8_t latency;        // pipeline latency
+		bool    mesh_enable;    // L2 mesh hop latency (simx)
+		uint8_t mesh_width;     // mesh columns (banks / width = rows)
+		uint8_t mesh_hop_delay; // extra cycles per Manhattan hop
 	};
 
 	struct PerfStats {
@@ -45,6 +48,11 @@ public:
 		uint64_t bank_stalls = 0;
 		uint64_t mshr_stalls = 0;
 		uint64_t mem_latency = 0;
+		uint64_t mesh_hop_cycles = 0;
+		uint64_t mesh_reqs_hops0 = 0;  // L2 requests with 0 Manhattan hops
+		uint64_t mesh_reqs_hops1 = 0;
+		uint64_t mesh_reqs_hops2 = 0;
+		uint64_t mesh_reqs_hops3p = 0; // 3+ hops (should be 0 on 2x2)
 
 		PerfStats& operator+=(const PerfStats& rhs) {
 			this->reads += rhs.reads;
@@ -55,6 +63,11 @@ public:
 			this->bank_stalls += rhs.bank_stalls;
 			this->mshr_stalls += rhs.mshr_stalls;
 			this->mem_latency += rhs.mem_latency;
+			this->mesh_hop_cycles += rhs.mesh_hop_cycles;
+			this->mesh_reqs_hops0 += rhs.mesh_reqs_hops0;
+			this->mesh_reqs_hops1 += rhs.mesh_reqs_hops1;
+			this->mesh_reqs_hops2 += rhs.mesh_reqs_hops2;
+			this->mesh_reqs_hops3p += rhs.mesh_reqs_hops3p;
 			return *this;
 		}
 	};

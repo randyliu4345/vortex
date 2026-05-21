@@ -2,6 +2,8 @@
 
 This file contains context and guidelines for coding agents working in this repository.
 
+**Cursor Agent behavior** (portable, not Vortex-specific): see [CURSOR-AGENTS.md](CURSOR-AGENTS.md). That guide is always applied via `.cursor/rules/cursor-agents.mdc`; this file covers Vortex build, test, and project conventions only.
+
 ## Vortex Documentation Map
 
 - `docs/codebase.md` (repo file tree map)
@@ -76,6 +78,14 @@ make -C tests/opencl run-rtlsim
 ```bash
 make -C tests/regression/<test-name>
 ./ci/blackbox.sh --driver=rtlsim --app=<test-name> --debug=1 --log=run.log
+```
+
+### L2 mesh + core affinity example (simx)
+
+```bash
+make -C tests/regression/mesh_l2_affinity
+CONFIGS="-DL2_ENABLE -DL2_MESH_ENABLE -DNUM_CORES=4 -DSOCKET_SIZE=1 -DL2_NUM_BANKS=4" \
+  ./ci/blackbox.sh --driver=simx --app=mesh_l2_affinity --cores=4 --l2cache --l2mesh
 ```
 
 ### CI

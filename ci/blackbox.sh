@@ -19,7 +19,7 @@ ROOT_DIR=$SCRIPT_DIR/..
 show_usage()
 {
     echo "Vortex BlackBox Test Driver v1.0"
-    echo "Usage: $0 [[--clusters=#n] [--cores=#n] [--warps=#n] [--threads=#n] [--l2cache] [--l3cache] [[--driver=#name] [--app=#app] [--args=#args] [--debug=#level] [--scope] [--saif] [--perf=#class] [--log=logfile] [--nohup] [--help]]"
+    echo "Usage: $0 [[--clusters=#n] [--cores=#n] [--warps=#n] [--threads=#n] [--l2cache] [--l2mesh] [--l3cache] [[--driver=#name] [--app=#app] [--args=#args] [--debug=#level] [--scope] [--saif] [--perf=#class] [--log=logfile] [--nohup] [--help]]"
 }
 
 show_help()
@@ -65,6 +65,7 @@ parse_args() {
             --warps=*)  CONFIGS=$(add_option "$CONFIGS" "-DNUM_WARPS=${i#*=}") ;;
             --threads=*) CONFIGS=$(add_option "$CONFIGS" "-DNUM_THREADS=${i#*=}") ;;
             --l2cache)  CONFIGS=$(add_option "$CONFIGS" "-DL2_ENABLE") ;;
+            --l2mesh)   CONFIGS=$(add_option "$CONFIGS" "-DL2_MESH_ENABLE") ;;
             --l3cache)  CONFIGS=$(add_option "$CONFIGS" "-DL3_ENABLE") ;;
             --perf=*)   CONFIGS=$(add_option "$CONFIGS" "-DPERF_ENABLE"); PERF_CLASS=${i#*=} ;;
             --debug=*)  DEBUG=1; DEBUG_LEVEL=${i#*=} ;;

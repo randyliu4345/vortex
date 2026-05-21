@@ -44,6 +44,8 @@ public:
   // SimPlatform cycle count at end of the last completed run() (0 before first run).
   uint64_t last_run_sim_cycles() const;
 
+  void print_mesh_l2_stats(const char* tag) const;
+
 #ifdef VM_ENABLE
   bool is_satp_unset();
   uint8_t get_satp_mode();

@@ -46,6 +46,7 @@ all:
 	$(MAKE) -C affinity
 	$(MAKE) -C dyn_launch_v1
 	$(MAKE) -C gnn_spmm
+	$(MAKE) -C mesh_l2_affinity
 
 run-simx:
 	$(MAKE) -C basic run-simx
@@ -86,6 +87,7 @@ run-simx:
 	$(MAKE) -C affinity run-simx
 	$(MAKE) -C dyn_launch_v1 run-simx
 	$(MAKE) -C gnn_spmm run-simx
+	$(MAKE) -C mesh_l2_affinity run-simx
 
 run-rtlsim:
 	$(MAKE) -C basic run-rtlsim
@@ -169,3 +171,4 @@ clean:
 	$(MAKE) -C affinity clean
 	$(MAKE) -C dyn_launch_v1 clean
 	$(MAKE) -C gnn_spmm clean
+	$(MAKE) -C mesh_l2_affinity clean

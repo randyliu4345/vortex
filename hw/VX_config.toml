@@ -208,6 +208,12 @@ L2_CRSQ_SIZE = 2
 L2_NUM_BANKS = "expr: min($L2_NUM_REQS, 16)"
 L2_MEM_PORTS = "expr: min($L2_NUM_BANKS, $PLATFORM_MEMORY_NUM_BANKS) if $L2_ENABLE else min($L2_NUM_REQS, $PLATFORM_MEMORY_NUM_BANKS)"
 
+# SimX-only: Manhattan hop delay between core and L2 bank on a 2-D mesh.
+L2_MESH_ENABLE = false
+L2_MESH_HOP_DELAY = 12
+L2_MESH_WIDTH = 2
+L2_MESH_ENABLED = "expr: 1 if ($L2_MESH_ENABLE and $L2_ENABLE) else 0"
+
 [l3cache]
 L3_CACHE_SIZE = 2097152
 L3_NUM_WAYS = 8

@@ -18,6 +18,7 @@
 
 #include <cstdlib>
 #include <execinfo.h>
+#include <iostream>
 
 using namespace vortex;
 
@@ -73,8 +74,8 @@ ProcessorImpl::ProcessorImpl(const Arch& arch)
     false,                    // write response
     L3_MSHR_SIZE,             // mshr size
     2,                        // pipeline latency
-    }
-  );
+    false, 0, 0,              // mesh (L2 only)
+  });
 
   // connect L3 core interfaces
   for (uint32_t i = 0; i < arch.num_clusters(); ++i) {
@@ -211,6 +212,30 @@ ProcessorImpl::PerfStats ProcessorImpl::perf_stats() const {
   return perf;
 }
 
+void ProcessorImpl::print_mesh_l2_stats(const char* tag) const {
+  uint64_t h0 = 0, h1 = 0, h2 = 0, h3p = 0, hop_cycles = 0;
+  for (const auto& cluster : clusters_) {
+    const auto& l2 = cluster->perf_stats().l2cache;
+    h0 += l2.mesh_reqs_hops0;
+    h1 += l2.mesh_reqs_hops1;
+    h2 += l2.mesh_reqs_hops2;
+    h3p += l2.mesh_reqs_hops3p;
+    hop_cycles += l2.mesh_hop_cycles;
+  }
+  const uint64_t total = h0 + h1 + h2 + h3p;
+  if (total == 0 && hop_cycles == 0)
+    return;
+  const char* lbl = (tag && tag[0]) ? tag : "run";
+  std::cerr << "MESH_L2_STATS tag=" << lbl
+            << " reqs_total=" << total
+            << " close_0hop=" << h0
+            << " mid_1hop=" << h1
+            << " far_2hop=" << h2
+            << " hops3p=" << h3p
+            << " mesh_hop_cycles=" << hop_cycles
+            << std::endl;
+}
+
 void ProcessorImpl::reset_perf_stats() {
   perf_mem_reads_ = 0;
   perf_mem_writes_ = 0;
@@ -252,6 +277,10 @@ void Processor::reset() {
 
 uint64_t Processor::last_run_sim_cycles() const {
   return impl_->last_run_sim_cycles();
+}
+
+void Processor::print_mesh_l2_stats(const char* tag) const {
+  impl_->print_mesh_l2_stats(tag);
 }
 
 int Processor::run() {

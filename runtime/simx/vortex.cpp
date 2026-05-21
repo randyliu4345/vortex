@@ -339,6 +339,10 @@ public:
     // DCRs already written by stub; just trigger execution
     future_ = std::async(std::launch::async, [&] {
       processor_.run();
+      if (std::getenv("VORTEX_MESH_STATS") != nullptr) {
+        const char* tag = std::getenv("VORTEX_MESH_TAG");
+        processor_.print_mesh_l2_stats(tag ? tag : "");
+      }
       vx_e2e_on_sim_run_end(processor_.last_run_sim_cycles());
     });
     return 0;

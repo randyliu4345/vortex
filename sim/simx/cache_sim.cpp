@@ -694,7 +694,15 @@ private:
 class CacheSim::Impl {
 public:
   Impl(CacheSim *simobject, const Config &config)
-      : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports), bank_stalls_baseline_(0) {
+      : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports), bank_stalls_baseline_(0), mesh_hop_cycles_(0), mesh_reqs_hops0_(0), mesh_reqs_hops1_(0), mesh_reqs_hops2_(0), mesh_reqs_hops3p_(0) {
+    mesh_enabled_ = config_.mesh_enable;
+    mesh_width_ = config_.mesh_width ? config_.mesh_width : 1;
+    mesh_hop_delay_ = config_.mesh_hop_delay;
+    mesh_nodes_ = 1u << config_.B;
+    if (mesh_enabled_ && (mesh_nodes_ % mesh_width_ != 0)) {
+      mesh_enabled_ = false;
+    }
+    mesh_height_ = mesh_enabled_ ? (mesh_nodes_ / mesh_width_) : 1;
     char sname[100];
 
     uint32_t num_banks = (1 << config.B);
@@ -793,7 +801,16 @@ public:
       if (bank_rsp.empty())
         continue;
       auto &core_rsp = bank_rsp.peek();
-      if (simobject_->core_rsp_out.at(req_id).try_send(core_rsp, 0)) {
+      uint32_t rsp_delay = 0;
+      if (mesh_enabled_) {
+        auto it = mesh_rsp_delay_.find(core_rsp.uuid);
+        if (it != mesh_rsp_delay_.end()) {
+          rsp_delay = it->second;
+          mesh_hop_cycles_ += rsp_delay;
+          mesh_rsp_delay_.erase(it);
+        }
+      }
+      if (simobject_->core_rsp_out.at(req_id).try_send(core_rsp, rsp_delay)) {
         DT(3, simobject_->name() << " core-rsp: " << core_rsp);
         bank_rsp.pop();
       }
@@ -810,7 +827,24 @@ public:
           core_req_in.pop();
         }
       } else {
-        if (bank_core_xbar_->ReqIn.at(req_id).try_send(core_req, 0)) {
+        uint32_t req_delay = mesh_delay(req_id, core_req.addr);
+        if (mesh_enabled_) {
+          uint32_t bank = params_.addr_bank_id(core_req.addr);
+          uint32_t hops = mesh_hops(mesh_node(req_id), mesh_node(bank));
+          if (hops == 0)
+            ++mesh_reqs_hops0_;
+          else if (hops == 1)
+            ++mesh_reqs_hops1_;
+          else if (hops == 2)
+            ++mesh_reqs_hops2_;
+          else
+            ++mesh_reqs_hops3p_;
+        }
+        if (bank_core_xbar_->ReqIn.at(req_id).try_send(core_req, req_delay)) {
+          if (mesh_enabled_ && req_delay != 0) {
+            mesh_hop_cycles_ += req_delay;
+            mesh_rsp_delay_[core_req.uuid] = req_delay;
+          }
           core_req_in.pop();
         }
       }
@@ -824,6 +858,11 @@ public:
         perf_stats += bank->perf_stats();
       }
       perf_stats.bank_stalls = bank_core_xbar_->collisions() - bank_stalls_baseline_;
+      perf_stats.mesh_hop_cycles = mesh_hop_cycles_;
+      perf_stats.mesh_reqs_hops0 = mesh_reqs_hops0_;
+      perf_stats.mesh_reqs_hops1 = mesh_reqs_hops1_;
+      perf_stats.mesh_reqs_hops2 = mesh_reqs_hops2_;
+      perf_stats.mesh_reqs_hops3p = mesh_reqs_hops3p_;
     }
     return perf_stats;
   }
@@ -831,6 +870,12 @@ public:
   void reset_perf_stats() {
     if (config_.bypass)
       return;
+    mesh_hop_cycles_ = 0;
+    mesh_reqs_hops0_ = 0;
+    mesh_reqs_hops1_ = 0;
+    mesh_reqs_hops2_ = 0;
+    mesh_reqs_hops3p_ = 0;
+    mesh_rsp_delay_.clear();
     for (auto &bank : banks_) {
       bank->reset_perf_stats();
     }
@@ -866,6 +911,25 @@ private:
     return true;
   }
 
+  uint32_t mesh_node(uint32_t id) const {
+    return id % mesh_nodes_;
+  }
+
+  uint32_t mesh_hops(uint32_t src, uint32_t dst) const {
+    uint32_t sx = src % mesh_width_;
+    uint32_t sy = src / mesh_width_;
+    uint32_t dx = dst % mesh_width_;
+    uint32_t dy = dst / mesh_width_;
+    return (sx > dx ? sx - dx : dx - sx) + (sy > dy ? sy - dy : dy - sy);
+  }
+
+  uint32_t mesh_delay(uint32_t src_id, uint64_t addr) const {
+    if (!mesh_enabled_)
+      return 0;
+    uint32_t bank = params_.addr_bank_id(addr);
+    return mesh_hops(mesh_node(src_id), mesh_node(bank)) * mesh_hop_delay_;
+  }
+
   CacheSim *const simobject_;
   Config config_;
   params_t params_;
@@ -875,6 +939,17 @@ private:
   MemCrossBar::Ptr bank_core_xbar_;
   uint32_t init_cycles_;
   uint64_t bank_stalls_baseline_;
+  bool mesh_enabled_;
+  uint32_t mesh_width_;
+  uint32_t mesh_height_;
+  uint32_t mesh_nodes_;
+  uint32_t mesh_hop_delay_;
+  uint64_t mesh_hop_cycles_;
+  uint64_t mesh_reqs_hops0_;
+  uint64_t mesh_reqs_hops1_;
+  uint64_t mesh_reqs_hops2_;
+  uint64_t mesh_reqs_hops3p_;
+  std::unordered_map<uint64_t, uint32_t> mesh_rsp_delay_;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

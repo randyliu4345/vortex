@@ -506,8 +506,8 @@ extern int vx_dump_perf(vx_device_h hdevice, FILE *stream) {
         l2_tot.bank_st += bst;
         l2_tot.mshr_st += mst;
 
-        perf_print_core(stream, rep_core, "l2cache: reqs=%" PRIu64 ", miss_r=%" PRIu64 " (hit=%d%%), miss_w=%" PRIu64 " (hit=%d%%)",
-                        r + w, mr, calc_ratio(mr, r), mw, calc_ratio(mw, w));
+        perf_print_core(stream, rep_core, "l2cache: reqs=%" PRIu64 ", miss_r=%" PRIu64 " (hit=%d%%), miss_w=%" PRIu64 " (hit=%d%%), bank_st=%" PRIu64 " (utility=%d%%)",
+                        r + w, mr, calc_ratio(mr, r), mw, calc_ratio(mw, w), bst, calc_utility(r + w, bst));
       }
     }
 

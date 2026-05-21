@@ -46,6 +46,7 @@ Socket::Socket(const SimContext& ctx,
     false,                  // write response
     ICACHE_MSHR_SIZE,       // mshr size
     1,                      // pipeline latency
+    false, 0, 0,            // mesh (L2 only)
   });
 
   snprintf(sname, 100, "%s-dcache", name);
@@ -63,6 +64,7 @@ Socket::Socket(const SimContext& ctx,
     false,                  // write response
     DCACHE_MSHR_SIZE,       // mshr size
     1,                      // pipeline latency
+    false, 0, 0,            // mesh (L2 only)
   });
 
   // find overlap
