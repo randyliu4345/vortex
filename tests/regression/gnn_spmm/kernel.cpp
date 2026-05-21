@@ -63,9 +63,19 @@ static void master_dispatch_kernel(master_arg_t* m) {
     pool[i].end_node   = ends[i];
     vx_fence();
 
-    const uint32_t aff = m->baseline_force_any
-        ? VORTEX_AFFINITY_ANY
-        : (affs[i] % ncores);
+    const uint32_t home = affs[i] % ncores;
+    uint32_t aff;
+    switch (m->affinity_mode) {
+    case GNN_AFFINITY_ANY:
+      aff = VORTEX_AFFINITY_ANY;
+      break;
+    case GNN_AFFINITY_REMOTE:
+      aff = (home + 2u) % ncores;
+      break;
+    default:
+      aff = home;
+      break;
+    }
 
     vx_kmu_launch_desc_t desc;
     vx_launch_desc_init_affine(&desc,

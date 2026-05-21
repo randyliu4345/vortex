@@ -11,6 +11,10 @@
 #define GNN_ENTRY_MASTER 0x474E4D53u  // 'GNMS'
 #define GNN_ENTRY_SPMM   0x474E5350u  // 'GNSP'
 
+#define GNN_AFFINITY_HOME   0u
+#define GNN_AFFINITY_ANY    1u
+#define GNN_AFFINITY_REMOTE 2u
+
 // Per-mini SpMM arguments (device-launched child uses this layout).
 typedef struct {
   uint32_t entry_kind;         // must be GNN_ENTRY_SPMM
@@ -34,7 +38,7 @@ typedef struct {
   uint64_t child_arg_pool_addr;
   uint64_t kernel_pc;
   uint32_t num_minis;
-  uint32_t baseline_force_any;  // 1 => VORTEX_AFFINITY_ANY for every child
+  uint32_t affinity_mode;  // GNN_AFFINITY_HOME | ANY | REMOTE
   uint32_t child_block_x;
   uint32_t num_cores;
 } master_arg_t;

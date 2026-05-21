@@ -2,10 +2,10 @@
 // runs a master CTA that issues 64 child SpMM grids inside a single
 // processor.run(), so L1/L2 state persists across mini-partitions.
 //
-// Run 1 (baseline): master forces VORTEX_AFFINITY_ANY on every child launch.
-// Run 2 (affinity): master uses mini_partition_core_affinity[i] (mod num_cores).
-// vx_perf_reset() between runs clears perf counters; the next host launch
-// still performs SimPlatform::reset() as usual.
+// Three phases (HOME / ANY / REMOTE) mirror mesh_l2_affinity: HOME pins each mini
+// to mini_partition_core_affinity[i], REMOTE uses (home+2)%num_cores, ANY lets
+// KMU schedule freely. Use CONFIGS=-DL2_ENABLE -DL2_MESH_ENABLE and --l2mesh for
+// L2 Manhattan hop delay; VORTEX_MESH_STATS=1 prints hop histograms per phase.
 
 #include <iostream>
 #include <iomanip>
@@ -337,8 +337,11 @@ int main(int argc, char** argv) {
   if (!l2_enabled) {
     std::cerr
         << "Note: L2 not present in this ISA config. Rebuild/run with "
-           "CONFIGS=-DL2_ENABLE or ./ci/blackbox.sh --l2cache ... for "
-           "GNN_CSV L2_CLUSTER rows.\n";
+           "CONFIGS=-DL2_ENABLE -DL2_MESH_ENABLE or "
+           "./ci/blackbox.sh --l2cache --l2mesh ... for GNN_CSV L2_CLUSTER rows.\n";
+  }
+  if (std::getenv("VORTEX_MESH_STATS") != nullptr && !l2_enabled) {
+    std::cerr << "Warning: VORTEX_MESH_STATS set but L2 is disabled.\n";
   }
 
   const uint32_t num_minis = GNN_NUM_MINI_PARTITIONS;
@@ -411,7 +414,7 @@ int main(int argc, char** argv) {
   const uint32_t master_grid_dim = 1u;
   const uint32_t master_block_dim = 1u;
 
-  auto run_master_phase = [&](const char* phase_name, uint32_t baseline_force_any,
+  auto run_master_phase = [&](const char* phase_name, uint32_t affinity_mode,
                               PhaseSnapshot* snap_out) {
     RT_CHECK(vx_perf_reset(device));
 
@@ -423,7 +426,7 @@ int main(int argc, char** argv) {
     ma.child_arg_pool_addr          = child_pool_addr;
     ma.kernel_pc                    = kernel_pc;
     ma.num_minis                    = num_minis;
-    ma.baseline_force_any           = baseline_force_any;
+    ma.affinity_mode                = affinity_mode;
     ma.child_block_x                = child_block_x;
     ma.num_cores                    = (uint32_t)num_cores;
 
@@ -469,57 +472,62 @@ int main(int argc, char** argv) {
     snap_out->dispersion      = disp;
   };
 
-  PhaseSnapshot baseline_snap{}, affinity_snap{};
-  std::cout << "=== Run 1: BASELINE (device-side launches, affinity=ANY) ===" << std::endl;
-  run_master_phase("baseline", 1u, &baseline_snap);
+  struct ModeSpec {
+    const char* name;
+    uint32_t mode;
+  };
+  const ModeSpec modes[] = {
+      {"home", GNN_AFFINITY_HOME},
+      {"any", GNN_AFFINITY_ANY},
+      {"remote", GNN_AFFINITY_REMOTE},
+  };
+  PhaseSnapshot snaps[3]{};
 
-  std::cout << "=== vx_perf_reset (between runs) ===" << std::endl;
-  RT_CHECK(vx_perf_reset(device));
-
-  std::cout << "=== Run 2: AFFINITY (device-side launches, table affinity) ===" << std::endl;
-  run_master_phase("affinity", 0u, &affinity_snap);
-
-  const PhaseTotals& baseline = baseline_snap.totals;
-  const PhaseTotals& affinity = affinity_snap.totals;
+  for (int m = 0; m < 3; ++m) {
+    std::cout << "=== Run: " << modes[m].name
+              << " (KMU affinity, " << num_minis << " child launches) ==="
+              << std::endl;
+    run_master_phase(modes[m].name, modes[m].mode, &snaps[m]);
+  }
 
   std::cout << "\n"
             << "======== GNN_SPMM_COMPARISON (single processor.run() per phase, "
             << num_minis << " device launches) ========\n"
-            << std::left << std::setw(42) << "Metric"
-            << std::setw(24) << "Baseline" << std::setw(24) << "Affinity"
+            << std::left << std::setw(20) << "Mode"
+            << std::setw(18) << "L1_MISS"
+            << std::setw(18) << "L1_XBAR_B"
+            << std::setw(14) << "L2_READS"
+            << std::setw(14) << "L2_RD_MISS"
+            << std::setw(16) << "MCYCLE_MAX"
             << "\n"
-            << std::string(90, '-') << "\n"
-            << std::setw(42) << "Total L1_DCACHE_MISSES"
-            << std::setw(24) << baseline.l1_miss
-            << std::setw(24) << affinity.l1_miss << "\n"
-            << std::setw(42) << "Total CROSSBAR_TRAFFIC_BYTES (L1 miss)"
-            << std::setw(24) << baseline.l1_xbar
-            << std::setw(24) << affinity.l1_xbar << "\n"
-            << std::setw(42) << "L2_READS (phase total)"
-            << std::setw(24) << baseline.l2_reads
-            << std::setw(24) << affinity.l2_reads << "\n"
-            << std::setw(42) << "L2_READ_MISS (phase total)"
-            << std::setw(24) << baseline.l2_read_miss
-            << std::setw(24) << affinity.l2_read_miss << "\n"
-            << std::setw(42) << "MCYCLE (max core, phase)"
-            << std::setw(24) << baseline.max_cycle
-            << std::setw(24) << affinity.max_cycle << "\n"
-            << std::string(90, '-') << "\n"
-            << "--- Per-core L1 hit rate dispersion (population stddev %) ---\n"
-            << std::setw(42) << "STDDEV_HIT_RATE_PCT (core-to-core spread)"
-            << std::setw(24) << std::fixed << std::setprecision(4)
-            << baseline_snap.dispersion.stddev_pct
-            << std::setw(24) << affinity_snap.dispersion.stddev_pct << "\n"
-            << std::setw(42) << "MEAN_HIT_RATE_PCT"
-            << std::setw(24) << baseline_snap.dispersion.mean_pct
-            << std::setw(24) << affinity_snap.dispersion.mean_pct << "\n"
-            << std::setw(42) << "MIN_HIT_RATE_PCT (worst core)"
-            << std::setw(24) << baseline_snap.dispersion.min_pct
-            << std::setw(24) << affinity_snap.dispersion.min_pct << "\n"
-            << std::setw(42) << "MAX_HIT_RATE_PCT (best core)"
-            << std::setw(24) << baseline_snap.dispersion.max_pct
-            << std::setw(24) << affinity_snap.dispersion.max_pct << "\n"
-            << std::string(90, '-') << "\n";
+            << std::string(100, '-') << "\n";
+  for (int m = 0; m < 3; ++m) {
+    const PhaseTotals& t = snaps[m].totals;
+    std::cout << std::setw(20) << modes[m].name
+              << std::setw(18) << t.l1_miss
+              << std::setw(18) << t.l1_xbar
+              << std::setw(14) << t.l2_reads
+              << std::setw(14) << t.l2_read_miss
+              << std::setw(16) << t.max_cycle << "\n";
+  }
+  std::cout << std::string(100, '-') << "\n"
+            << "--- L1 hit-rate dispersion (stddev % across cores) ---\n";
+  for (int m = 0; m < 3; ++m) {
+    std::cout << std::setw(20) << modes[m].name
+              << std::fixed << std::setprecision(4)
+              << " stddev=" << snaps[m].dispersion.stddev_pct
+              << " mean=" << snaps[m].dispersion.mean_pct << "\n";
+  }
+  if (snaps[2].totals.max_cycle > snaps[0].totals.max_cycle) {
+    const double gap =
+        100.0 *
+        static_cast<double>(snaps[2].totals.max_cycle - snaps[0].totals.max_cycle) /
+        static_cast<double>(snaps[0].totals.max_cycle);
+    std::cout << "HOME vs REMOTE MCYCLE max gap: " << std::fixed
+              << std::setprecision(1) << gap << "%\n";
+  }
+  std::cout << std::string(100, '-') << "\n";
+  std::cout << "(Set VORTEX_MESH_STATS=1 with --l2mesh for L2 hop histograms on stderr.)\n";
 
   int errors = 0;
   if (verify_result) {
