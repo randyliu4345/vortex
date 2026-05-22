@@ -42,15 +42,16 @@ typedef struct {
   uint32_t core_affinity;   // global core_id to pin the grid to, or VORTEX_AFFINITY_ANY
 } vx_kmu_launch_desc_t;
 
-// Internal: fill all descriptor fields including affinity. Public callers
-// should prefer vx_launch_desc_init / vx_launch_desc_init_affine below.
-static inline void vx_launch_desc_init_ex(vx_kmu_launch_desc_t* desc,
-                                          uint64_t pc,
-                                          uint64_t arg,
-                                          const uint32_t grid_dim[3],
-                                          const uint32_t block_dim[3],
-                                          uint32_t lmem_size,
-                                          uint32_t core_affinity) {
+// Fill `desc` from a grid/block configuration, matching the host-side
+// `prepare_kernel_launch_params` logic. Pass VORTEX_AFFINITY_ANY (default)
+// for load-balanced launch, or a global core_id to pin the grid.
+static inline void vx_launch_desc_init(vx_kmu_launch_desc_t* desc,
+                                       uint64_t pc,
+                                       uint64_t arg,
+                                       const uint32_t grid_dim[3],
+                                       const uint32_t block_dim[3],
+                                       uint32_t lmem_size,
+                                       uint32_t core_affinity = VORTEX_AFFINITY_ANY) {
   uint32_t threads_per_warp = (uint32_t)vx_num_threads();
   uint32_t block_size = 1;
   for (int i = 0; i < 3; ++i) {
@@ -66,40 +67,6 @@ static inline void vx_launch_desc_init_ex(vx_kmu_launch_desc_t* desc,
   desc->warp_step[2] = (threads_per_warp / (block_dim[0] * block_dim[1])) % block_dim[2];
   desc->lmem_size    = lmem_size;
   desc->core_affinity = core_affinity;
-}
-
-// Fill `desc` from a grid/block configuration, matching the host-side
-// `prepare_kernel_launch_params` logic. The optional `core_affinity`
-// argument pins the launch to a single core (default: VORTEX_AFFINITY_ANY,
-// preserving load-balanced behavior). The default argument keeps every
-// existing call-site source-compatible.
-#ifdef __cplusplus
-static inline void vx_launch_desc_init(vx_kmu_launch_desc_t* desc,
-                                       uint64_t pc,
-                                       uint64_t arg,
-                                       const uint32_t grid_dim[3],
-                                       const uint32_t block_dim[3],
-                                       uint32_t lmem_size,
-                                       uint32_t core_affinity = VORTEX_AFFINITY_ANY) {
-  vx_launch_desc_init_ex(desc, pc, arg, grid_dim, block_dim, lmem_size, core_affinity);
-}
-#else
-// C call-sites must use vx_launch_desc_init_ex when an explicit affinity
-// is desired; the macro below preserves the legacy 6-argument signature.
-#define vx_launch_desc_init(d, pc, a, gd, bd, lm) \
-  vx_launch_desc_init_ex((d), (pc), (a), (gd), (bd), (lm), VORTEX_AFFINITY_ANY)
-#endif
-
-// Convenience wrapper that initializes the descriptor with a specific
-// core affinity. Equivalent to vx_launch_desc_init(..., core_id) in C++.
-static inline void vx_launch_desc_init_affine(vx_kmu_launch_desc_t* desc,
-                                              uint64_t pc,
-                                              uint64_t arg,
-                                              const uint32_t grid_dim[3],
-                                              const uint32_t block_dim[3],
-                                              uint32_t lmem_size,
-                                              uint32_t core_affinity) {
-  vx_launch_desc_init_ex(desc, pc, arg, grid_dim, block_dim, lmem_size, core_affinity);
 }
 
 // Fire off a child grid. The descriptor must remain stable in memory long
@@ -119,7 +86,7 @@ static inline void vx_kernel_launch_affine(uint64_t pc,
                                            uint32_t lmem_size,
                                            uint32_t core_affinity) {
   vx_kmu_launch_desc_t desc;
-  vx_launch_desc_init_ex(&desc, pc, arg, grid_dim, block_dim, lmem_size, core_affinity);
+  vx_launch_desc_init(&desc, pc, arg, grid_dim, block_dim, lmem_size, core_affinity);
   vx_kernel_launch(&desc);
 }
 

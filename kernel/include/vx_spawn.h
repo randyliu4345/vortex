@@ -76,8 +76,7 @@ void vx_serial(vx_serial_cb callback, const void * arg);
 //   lmem_size local-memory bytes per block
 //   core_id   global core_id to pin to, or VORTEX_AFFINITY_ANY for default
 //
-// Backward compatibility: callers that don't care about affinity should
-// keep using vx_kernel_launch + vx_launch_desc_init (defaults to ANY).
+// Omit core_id (or pass VORTEX_AFFINITY_ANY) for load-balanced launch.
 static inline void vx_spawn_affine(uint64_t pc,
                                    uint64_t arg,
                                    const uint32_t grid_dim[3],

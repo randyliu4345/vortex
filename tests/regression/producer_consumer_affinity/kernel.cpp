@@ -84,7 +84,7 @@ static void dispatch_kernel(master_arg_t* m) {
     vx_fence();
 
     vx_kmu_launch_desc_t desc;
-    vx_launch_desc_init_affine(&desc,
+    vx_launch_desc_init(&desc,
                                 m->kernel_pc,
                                 reinterpret_cast<uint64_t>(&pool[c]),
                                 grid,
