@@ -400,6 +400,9 @@ public:
       set.reset();
     }
     mshr_.reset();
+    while (!pipe_req_->empty()) {
+      pipe_req_->pop();
+    }
   }
 
   void tick() {
@@ -772,7 +775,32 @@ public:
   void reset() {
     if (config_.bypass)
       return;
-    // calculate cache initialization cycles
+    // Drop mesh routing state and any in-flight packets left in L2 queues
+    // when a processor.run() ends (SimPlatform calls reset() before the next).
+    mesh_rsp_delay_.clear();
+    for (uint32_t i = 0, n = config_.num_inputs; i < n; ++i) {
+      simobject_->core_req_in.at(i).clear();
+      simobject_->core_rsp_out.at(i).clear();
+    }
+    for (uint32_t i = 0; i < config_.mem_ports; ++i) {
+      simobject_->mem_req_out.at(i).clear();
+      simobject_->mem_rsp_in.at(i).clear();
+    }
+    for (auto &nc : nc_mem_arbs_) {
+      for (auto &ch : nc->ReqIn)  ch.clear();
+      for (auto &ch : nc->RspOut) ch.clear();
+      for (auto &ch : nc->ReqOut) ch.clear();
+      for (auto &ch : nc->RspIn)  ch.clear();
+    }
+    if (bank_core_xbar_) {
+      for (auto &ch : bank_core_xbar_->ReqIn)  ch.clear();
+      for (auto &ch : bank_core_xbar_->RspOut) ch.clear();
+      for (auto &ch : bank_core_xbar_->ReqOut) ch.clear();
+      for (auto &ch : bank_core_xbar_->RspIn)  ch.clear();
+    }
+    for (auto &bank : banks_) {
+      bank->reset();
+    }
     init_cycles_ = params_.sets_per_bank;
   }
 
@@ -879,7 +907,6 @@ public:
     mesh_reqs_hops1_ = 0;
     mesh_reqs_hops2_ = 0;
     mesh_reqs_hops3p_ = 0;
-    mesh_rsp_delay_.clear();
     for (auto &bank : banks_) {
       bank->reset_perf_stats();
     }

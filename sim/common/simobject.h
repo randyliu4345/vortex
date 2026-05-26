@@ -71,6 +71,7 @@ public:
   virtual bool full() const = 0;
   virtual uint32_t size() const = 0;
   virtual uint32_t capacity() const = 0;
+  virtual void clear() = 0;
 
 protected:
   explicit SimChannelBase(SimObjectBase* module)
@@ -331,6 +332,15 @@ public:
   uint32_t capacity() const override {
     if (sink_) return sink_->capacity();
     return storage_.capacity();
+  }
+
+  void clear() override {
+    if (sink_) {
+      sink_->clear();
+      return;
+    }
+    storage_.clear();
+    pending_count_ = 0;
   }
 
 protected:
