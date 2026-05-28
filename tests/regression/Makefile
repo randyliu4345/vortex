@@ -45,8 +45,6 @@ all:
 	$(MAKE) -C dyn_launch
 	$(MAKE) -C affinity
 	$(MAKE) -C dyn_launch_v1
-	$(MAKE) -C gnn_spmm
-	$(MAKE) -C mesh_l2_affinity
 	$(MAKE) -C producer_consumer_affinity
 	$(MAKE) -C moe_route
 
@@ -88,8 +86,6 @@ run-simx:
 	$(MAKE) -C dyn_launch run-simx
 	$(MAKE) -C affinity run-simx
 	$(MAKE) -C dyn_launch_v1 run-simx
-	$(MAKE) -C gnn_spmm run-simx
-	$(MAKE) -C mesh_l2_affinity run-simx
 	$(MAKE) -C producer_consumer_affinity run-simx
 	$(MAKE) -C moe_route run-simx
 
@@ -175,7 +171,5 @@ clean:
 	$(MAKE) -C dyn_launch clean
 	$(MAKE) -C affinity clean
 	$(MAKE) -C dyn_launch_v1 clean
-	$(MAKE) -C gnn_spmm clean
-	$(MAKE) -C mesh_l2_affinity clean
 	$(MAKE) -C producer_consumer_affinity clean
 	$(MAKE) -C moe_route clean
