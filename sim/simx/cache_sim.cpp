@@ -698,7 +698,7 @@ private:
 class CacheSim::Impl {
 public:
   Impl(CacheSim *simobject, const Config &config)
-      : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports), bank_stalls_baseline_(0), mesh_hop_cycles_(0), mesh_reqs_hops0_(0), mesh_reqs_hops1_(0), mesh_reqs_hops2_(0), mesh_reqs_hops3p_(0) {
+      : simobject_(simobject), config_(config), params_(config), banks_(1 << config.B), nc_mem_arbs_(config.mem_ports), bank_stalls_baseline_(0) {
     num_banks_ = 1u << config_.B;
     coarse_mapping_mode_ = config_.coarse_mapping_mode;
     coarse_page_log2_ = config_.coarse_page_log2 ? config_.coarse_page_log2 : 16;
@@ -838,7 +838,6 @@ public:
         auto it = mesh_rsp_delay_.find(core_rsp.uuid);
         if (it != mesh_rsp_delay_.end()) {
           rsp_delay = it->second;
-          mesh_hop_cycles_ += rsp_delay;
           mesh_rsp_delay_.erase(it);
         }
       }
@@ -859,22 +858,17 @@ public:
           core_req_in.pop();
         }
       } else {
-        uint32_t req_delay = mesh_delay(core_req.cid, core_req.addr);
+        uint32_t req_delay = 0;
+        uint32_t hops = 0;
         if (mesh_enabled_) {
-          uint32_t bank = addr_bank_id(core_req.addr);
-          uint32_t hops = mesh_hops(mesh_node(core_req.cid), mesh_node(bank));
-          if (hops == 0)
-            ++mesh_reqs_hops0_;
-          else if (hops == 1)
-            ++mesh_reqs_hops1_;
-          else if (hops == 2)
-            ++mesh_reqs_hops2_;
-          else
-            ++mesh_reqs_hops3p_;
+          const uint32_t bank = addr_bank_id(core_req.addr);
+          hops = mesh_hops(mesh_node(core_req.cid), mesh_node(bank));
+          req_delay = hops * mesh_hop_delay_;
         }
         if (bank_core_xbar_->ReqIn.at(req_id).try_send(core_req, req_delay)) {
-          if (mesh_enabled_ && req_delay != 0) {
-            mesh_hop_cycles_ += req_delay;
+          if (mesh_enabled_) {
+            mesh_.record(hops, mesh_hop_delay_);
+            mesh_by_core_[core_req.cid].record(hops, mesh_hop_delay_);
             mesh_rsp_delay_[core_req.uuid] = req_delay;
           }
           core_req_in.pop();
@@ -890,11 +884,8 @@ public:
         perf_stats += bank->perf_stats();
       }
       perf_stats.bank_stalls = bank_core_xbar_->collisions() - bank_stalls_baseline_;
-      perf_stats.mesh_hop_cycles = mesh_hop_cycles_;
-      perf_stats.mesh_reqs_hops0 = mesh_reqs_hops0_;
-      perf_stats.mesh_reqs_hops1 = mesh_reqs_hops1_;
-      perf_stats.mesh_reqs_hops2 = mesh_reqs_hops2_;
-      perf_stats.mesh_reqs_hops3p = mesh_reqs_hops3p_;
+      perf_stats.mesh = mesh_;
+      perf_stats.mesh_by_core = mesh_by_core_;
     }
     return perf_stats;
   }
@@ -902,11 +893,8 @@ public:
   void reset_perf_stats() {
     if (config_.bypass)
       return;
-    mesh_hop_cycles_ = 0;
-    mesh_reqs_hops0_ = 0;
-    mesh_reqs_hops1_ = 0;
-    mesh_reqs_hops2_ = 0;
-    mesh_reqs_hops3p_ = 0;
+    mesh_.reset();
+    mesh_by_core_.clear();
     for (auto &bank : banks_) {
       bank->reset_perf_stats();
     }
@@ -974,13 +962,6 @@ private:
     return (sx > dx ? sx - dx : dx - sx) + (sy > dy ? sy - dy : dy - sy);
   }
 
-  uint32_t mesh_delay(uint32_t src_cid, uint64_t addr) const {
-    if (!mesh_enabled_)
-      return 0;
-    uint32_t bank = addr_bank_id(addr);
-    return mesh_hops(mesh_node(src_cid), mesh_node(bank)) * mesh_hop_delay_;
-  }
-
   CacheSim *const simobject_;
   Config config_;
   params_t params_;
@@ -998,11 +979,8 @@ private:
   uint32_t mesh_height_;
   uint32_t mesh_nodes_;
   uint32_t mesh_hop_delay_;
-  uint64_t mesh_hop_cycles_;
-  uint64_t mesh_reqs_hops0_;
-  uint64_t mesh_reqs_hops1_;
-  uint64_t mesh_reqs_hops2_;
-  uint64_t mesh_reqs_hops3p_;
+  MeshHopBucket mesh_;
+  std::unordered_map<uint32_t, MeshHopBucket> mesh_by_core_;
   std::unordered_map<uint64_t, uint32_t> mesh_rsp_delay_;
 };
 

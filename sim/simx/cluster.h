@@ -20,9 +20,6 @@
 #include "core.h"
 #include "socket.h"
 #include "constants.h"
-#if L2_SOCKET_PRIVATE_ENABLED
-#include "l2_socket_fabric.h"
-#endif
 #ifdef EXT_DXA_ENABLE
 #include "dxa_core.h"
 #endif
@@ -121,21 +118,12 @@ public:
   DxaCore::Ptr& dxa_core() { return dxa_core_; }
 #endif
 
-#if L2_SOCKET_PRIVATE_ENABLED
-  const L2SocketFabric::Ptr& l2_fabric() const { return l2_fabric_; }
-#endif
-
 private:
   uint32_t                    cluster_id_;
   ProcessorImpl*              processor_;
   std::vector<Socket::Ptr>    sockets_;
   std::vector<core_barrier_t> gbarriers_;
-#if L2_SOCKET_PRIVATE_ENABLED
-  std::vector<CacheSim::Ptr>  l2caches_;
-  L2SocketFabric::Ptr         l2_fabric_;
-#else
   CacheSim::Ptr               l2cache_;
-#endif
   uint32_t                    cores_per_socket_;
 #ifdef EXT_DXA_ENABLE
   DxaCore::Ptr                dxa_core_;

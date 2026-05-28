@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <execinfo.h>
 #include <iostream>
+#include <unordered_map>
 
 using namespace vortex;
 
@@ -223,37 +224,57 @@ ProcessorImpl::PerfStats ProcessorImpl::perf_stats() const {
   return perf;
 }
 
-void ProcessorImpl::print_mesh_l2_stats(const char* tag) const {
-  uint64_t h0 = 0, h1 = 0, h2 = 0, h3p = 0, hop_cycles = 0;
-  for (const auto& cluster : clusters_) {
-#if L2_SOCKET_PRIVATE_ENABLED
-    const auto& fab = cluster->l2_fabric().perf_stats();
-    h0 += fab.mesh_reqs_hops0;
-    h1 += fab.mesh_reqs_hops1;
-    h2 += fab.mesh_reqs_hops2;
-    h3p += fab.mesh_reqs_hops3p;
-    hop_cycles += fab.mesh_hop_cycles;
-#else
-    const auto& l2 = cluster->perf_stats().l2cache;
-    h0 += l2.mesh_reqs_hops0;
-    h1 += l2.mesh_reqs_hops1;
-    h2 += l2.mesh_reqs_hops2;
-    h3p += l2.mesh_reqs_hops3p;
-    hop_cycles += l2.mesh_hop_cycles;
-#endif
-  }
-  const uint64_t total = h0 + h1 + h2 + h3p;
-  if (total == 0 && hop_cycles == 0)
-    return;
-  const char* lbl = (tag && tag[0]) ? tag : "run";
-  std::cerr << "MESH_L2_STATS tag=" << lbl
+static void print_mesh_bucket_line(const char* line_tag,
+                                   const char* tag,
+                                   const char* id_key,
+                                   uint32_t id_val,
+                                   const MeshHopBucket& b) {
+  const uint64_t total = b.reqs_total();
+  std::cerr << line_tag << " tag=" << (tag && tag[0] ? tag : "run")
+            << " " << id_key << "=" << id_val
             << " reqs_total=" << total
-            << " close_0hop=" << h0
-            << " mid_1hop=" << h1
-            << " far_2hop=" << h2
-            << " hops3p=" << h3p
-            << " mesh_hop_cycles=" << hop_cycles
+            << " close_0hop=" << b.mesh_reqs_hops0
+            << " mid_1hop=" << b.mesh_reqs_hops1
+            << " far_2hop=" << b.mesh_reqs_hops2
+            << " hops3=" << b.mesh_reqs_hops3
+            << " hops4=" << b.mesh_reqs_hops4
+            << " mesh_hop_cycles=" << b.mesh_hop_cycles
             << std::endl;
+}
+
+void ProcessorImpl::print_mesh_l2_stats(const char* tag) const {
+  MeshHopBucket agg;
+  std::unordered_map<uint32_t, MeshHopBucket> by_core;
+
+  for (const auto& cluster : clusters_) {
+    const auto& l2 = cluster->perf_stats().l2cache;
+    agg += l2.mesh;
+    for (const auto& kv : l2.mesh_by_core)
+      by_core[kv.first] += kv.second;
+  }
+
+  const uint64_t total = agg.reqs_total();
+  if (total == 0 && agg.mesh_hop_cycles == 0)
+    return;
+
+  const char* lbl = (tag && tag[0]) ? tag : "run";
+  print_mesh_bucket_line("MESH_L2_STATS", lbl, "scope", 0, agg);
+
+  uint32_t worst_core = 0;
+  uint64_t worst_cycles = 0;
+  for (const auto& kv : by_core) {
+    print_mesh_bucket_line("MESH_L2_CORE", lbl, "core", kv.first, kv.second);
+    if (kv.second.mesh_hop_cycles >= worst_cycles) {
+      worst_cycles = kv.second.mesh_hop_cycles;
+      worst_core = kv.first;
+    }
+  }
+  if (!by_core.empty()) {
+    std::cerr << "MESH_L2_WORST tag=" << lbl
+              << " core=" << worst_core
+              << " mesh_hop_cycles=" << worst_cycles
+              << std::endl;
+  }
 }
 
 void ProcessorImpl::reset_perf_stats() {

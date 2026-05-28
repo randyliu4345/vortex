@@ -214,12 +214,6 @@ L2_MESH_HOP_DELAY = 12
 L2_MESH_WIDTH = 2
 L2_MESH_ENABLED = "expr: 1 if ($L2_MESH_ENABLE and $L2_ENABLE) else 0"
 
-# SimX-only: one private L2 per socket; cross-socket accesses use socket mesh hops.
-# Home socket for an address: (addr >> L2_SOCKET_REGION_LOG2) % NUM_SOCKETS.
-L2_SOCKET_PRIVATE = false
-L2_SOCKET_REGION_LOG2 = 18
-L2_SOCKET_PRIVATE_ENABLED = "expr: 1 if ($L2_SOCKET_PRIVATE and $L2_ENABLE) else 0"
-
 [l3cache]
 L3_CACHE_SIZE = 2097152
 L3_NUM_WAYS = 8

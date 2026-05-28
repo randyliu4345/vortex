@@ -14,9 +14,59 @@
 #pragma once
 
 #include <simobject.h>
+#include <unordered_map>
 #include "mem_sim.h"
 
 namespace vortex {
+
+// L2 mesh stats: one histogram sample per successful core->bank xbar transfer.
+struct MeshHopBucket {
+	uint64_t mesh_hop_cycles = 0;
+	uint64_t mesh_reqs_hops0 = 0;
+	uint64_t mesh_reqs_hops1 = 0;
+	uint64_t mesh_reqs_hops2 = 0;
+	uint64_t mesh_reqs_hops3 = 0;
+	uint64_t mesh_reqs_hops4 = 0;
+
+	uint64_t reqs_total() const {
+		return mesh_reqs_hops0 + mesh_reqs_hops1 + mesh_reqs_hops2
+		     + mesh_reqs_hops3 + mesh_reqs_hops4;
+	}
+
+	MeshHopBucket& operator+=(const MeshHopBucket& rhs) {
+		mesh_hop_cycles += rhs.mesh_hop_cycles;
+		mesh_reqs_hops0 += rhs.mesh_reqs_hops0;
+		mesh_reqs_hops1 += rhs.mesh_reqs_hops1;
+		mesh_reqs_hops2 += rhs.mesh_reqs_hops2;
+		mesh_reqs_hops3 += rhs.mesh_reqs_hops3;
+		mesh_reqs_hops4 += rhs.mesh_reqs_hops4;
+		return *this;
+	}
+
+	void record(uint32_t hops, uint32_t hop_delay_cycles) {
+		const uint32_t delay = hops * hop_delay_cycles;
+		mesh_hop_cycles += delay;
+		if (hops == 0)
+			++mesh_reqs_hops0;
+		else if (hops == 1)
+			++mesh_reqs_hops1;
+		else if (hops == 2)
+			++mesh_reqs_hops2;
+		else if (hops == 3)
+			++mesh_reqs_hops3;
+		else
+			++mesh_reqs_hops4;
+	}
+
+	void reset() {
+		mesh_hop_cycles = 0;
+		mesh_reqs_hops0 = 0;
+		mesh_reqs_hops1 = 0;
+		mesh_reqs_hops2 = 0;
+		mesh_reqs_hops3 = 0;
+		mesh_reqs_hops4 = 0;
+	}
+};
 
 class CacheSim : public SimObject<CacheSim> {
 public:
@@ -50,11 +100,9 @@ public:
 		uint64_t bank_stalls = 0;
 		uint64_t mshr_stalls = 0;
 		uint64_t mem_latency = 0;
-		uint64_t mesh_hop_cycles = 0;
-		uint64_t mesh_reqs_hops0 = 0;  // L2 requests with 0 Manhattan hops
-		uint64_t mesh_reqs_hops1 = 0;
-		uint64_t mesh_reqs_hops2 = 0;
-		uint64_t mesh_reqs_hops3p = 0; // 3+ hops (should be 0 on 2x2)
+		MeshHopBucket mesh;
+		// Per global core_id (successful xbar transfers only).
+		std::unordered_map<uint32_t, MeshHopBucket> mesh_by_core;
 
 		PerfStats& operator+=(const PerfStats& rhs) {
 			this->reads += rhs.reads;
@@ -65,11 +113,9 @@ public:
 			this->bank_stalls += rhs.bank_stalls;
 			this->mshr_stalls += rhs.mshr_stalls;
 			this->mem_latency += rhs.mem_latency;
-			this->mesh_hop_cycles += rhs.mesh_hop_cycles;
-			this->mesh_reqs_hops0 += rhs.mesh_reqs_hops0;
-			this->mesh_reqs_hops1 += rhs.mesh_reqs_hops1;
-			this->mesh_reqs_hops2 += rhs.mesh_reqs_hops2;
-			this->mesh_reqs_hops3p += rhs.mesh_reqs_hops3p;
+			this->mesh += rhs.mesh;
+			for (const auto& kv : rhs.mesh_by_core)
+				this->mesh_by_core[kv.first] += kv.second;
 			return *this;
 		}
 	};

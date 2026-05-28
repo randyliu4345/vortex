@@ -48,6 +48,7 @@ all:
 	$(MAKE) -C gnn_spmm
 	$(MAKE) -C mesh_l2_affinity
 	$(MAKE) -C producer_consumer_affinity
+	$(MAKE) -C moe_route
 
 run-simx:
 	$(MAKE) -C basic run-simx
@@ -90,6 +91,7 @@ run-simx:
 	$(MAKE) -C gnn_spmm run-simx
 	$(MAKE) -C mesh_l2_affinity run-simx
 	$(MAKE) -C producer_consumer_affinity run-simx
+	$(MAKE) -C moe_route run-simx
 
 run-rtlsim:
 	$(MAKE) -C basic run-rtlsim
@@ -127,6 +129,7 @@ run-rtlsim:
 	$(MAKE) -C wgather run-rtlsim
 	$(MAKE) -C wsync run-rtlsim
 	$(MAKE) -C dyn_launch_v1 run-rtlsim
+	$(MAKE) -C moe_route run-rtlsim
 
 clean:
 	$(MAKE) -C basic clean
@@ -175,3 +178,4 @@ clean:
 	$(MAKE) -C gnn_spmm clean
 	$(MAKE) -C mesh_l2_affinity clean
 	$(MAKE) -C producer_consumer_affinity clean
+	$(MAKE) -C moe_route clean

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "../../../gnn_data.h"
 
-/* Match SimX L2_SOCKET_REGION_LOG2 when using --l2socket (32 KiB/socket). */
+/* Socket-homed address regions for gnn_spmm layout (compile-time override). */
 #ifndef GNN_SOCKET_REGION_LOG2
 #define GNN_SOCKET_REGION_LOG2 15u
 #endif
