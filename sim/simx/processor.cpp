@@ -90,7 +90,7 @@ ProcessorImpl::ProcessorImpl(const Arch& arch)
 
   // set up memory profiling
   for (uint32_t i = 0; i < L3_MEM_PORTS; ++i) {
-    memsim_->mem_req_in.at(i).tx_callback([&](const MemReq& req, uint64_t cycle){
+    memsim_->mem_req_in.at(i).tx_callback([this](const MemReq& req, uint64_t cycle){
       __unused (cycle);
       perf_mem_reads_  += !req.write;
       perf_mem_writes_ += req.write;
@@ -123,6 +123,7 @@ ProcessorImpl::~ProcessorImpl() {
 }
 
 void ProcessorImpl::attach_ram(RAM* ram) {
+  kmu_.attach_ram(ram);
   for (auto cluster : clusters_) {
     cluster->attach_ram(ram);
   }
@@ -150,6 +151,10 @@ int ProcessorImpl::run() {
         continue;
       }
       exitcode |= cluster->get_exitcode();
+    }
+    if (kmu_.running() || kmu_.launch_pending()) {
+      kmu_.service_launch_queue();
+      done = false;
     }
     perf_mem_latency_ += perf_mem_pending_reads_;
   } while (!done);

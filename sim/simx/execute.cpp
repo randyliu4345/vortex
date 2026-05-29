@@ -1559,6 +1559,9 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       case WctlType::WSYNC: {
         trace->fetch_stall = true;
       } break;
+      case WctlType::KMU_LAUNCH: {
+        trace->fetch_stall = false;
+      } break;
       default:
         std::abort();
       }

@@ -20,6 +20,20 @@
 
 namespace vortex {
 
+class RAM;
+
+// Layout must match vx_kmu_launch_desc_t in kernel/include/vx_launch.h.
+struct vx_kmu_launch_desc_t {
+  uint64_t pc;
+  uint64_t arg;
+  uint32_t grid_dim[3];
+  uint32_t block_dim[3];
+  uint32_t block_size;
+  uint32_t warp_step[3];
+  uint32_t lmem_size;
+  uint32_t flags;
+};
+
 struct kmu_req_t {
   uint64_t PC;
   uint64_t param;
@@ -46,8 +60,7 @@ public:
   void start();
 
   // Device-initiated re-arm (dynamic parallelism). Overrides the current KMU
-  // state in one shot and starts dispatching CTAs. The caller must ensure the
-  // KMU is idle (no CTAs left to dispatch) before invoking this.
+  // state in one shot and starts dispatching CTAs.
   void arm_child(uint64_t pc,
                  uint64_t param,
                  const uint32_t grid_dim[3],
@@ -56,17 +69,25 @@ public:
                  const uint32_t warp_step[3],
                  uint32_t lmem_size);
 
-  // Attach the memory read path used when a device-side launch request arrives
-  // from a given core.
+  void attach_ram(RAM* ram);
+
+  // Attach the memory read path used when reading launch descriptors through
+  // a core's LSU path (fallback when direct RAM is unavailable).
   void attach_mem_reader(uint32_t core_id, const mem_reader_t& mem_read);
 
-  // Device-initiated launch request through VX_CSR_KMU_LAUNCH. This models the
-  // CSR write as a launch signal into the KMU, carrying the descriptor address
-  // and source core rather than descriptor decoding logic.
-  void request_child_launch(uint64_t desc_addr, uint32_t core_id);
+  // Doorbell from a core: the launch descriptor was enqueued in global memory.
+  void signal_launch_request(uint32_t core_id);
 
   // True while CTAs remain to be issued.
   bool running() const { return running_; }
+
+  bool launch_pending() const { return launch_pending_; }
+
+  // Drain pending device launches when idle.
+  void service_launch_queue() { this->try_drain_launch_queue(); }
+
+  // Called by CtaDispatcher when a CTA finishes executing on a core.
+  void notify_cta_complete();
 
   // Called by CtaDispatcher when ready for the next CTA.
   // Fills *req with the next CTA's parameters and advances the iterator.
@@ -84,9 +105,23 @@ private:
   bool     running_;
   uint32_t cta_id_;
   uint32_t block_idx_[3];
+  bool     launch_pending_;
+  uint32_t launch_core_id_;
+  RAM*     ram_;
   std::unordered_map<uint32_t, mem_reader_t> mem_readers_;
 
-  void launch_child(uint64_t desc_addr, const mem_reader_t& mem_read);
+  uint32_t grid_total_ctas_;
+  uint32_t grid_completed_ctas_;
+  bool     grid_executing_;
+  bool     active_grid_tail_;
+  uint32_t tail_stream_outstanding_;
+
+  void mem_read(void* data, uint64_t addr, uint32_t size, uint32_t core_id);
+  void mem_write(const void* data, uint64_t addr, uint32_t size);
+  void init_grid_tracking();
+  void on_grid_complete();
+  void try_drain_launch_queue();
+  void launch_child(const vx_kmu_launch_desc_t& desc);
 };
 
 } // namespace vortex

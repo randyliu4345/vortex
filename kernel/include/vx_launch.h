@@ -16,15 +16,17 @@
 #define __VX_LAUNCH_H__
 
 #include <stdint.h>
+#include <VX_config.h>
 #include <vx_intrinsics.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Kernel launch descriptor consumed by the KMU through VX_CSR_KMU_LAUNCH.
-// Layout is matched byte-for-byte by the simx emulator; keep packed and
-// in the exact field order below.
+#define VX_LAUNCH_FLAG_TAIL  (1u << 0)
+
+// Device-side kernel launch descriptor. Layout is matched byte-for-byte by
+// the KMU when it reads the struct from global memory.
 typedef struct {
   uint64_t pc;              // kernel entry PC (same convention as VX_DCR_KMU_STARTUP_ADDR)
   uint64_t arg;             // kernel argument pointer (passed via MSCRATCH)
@@ -33,7 +35,26 @@ typedef struct {
   uint32_t block_size;      // threads per block (product of block_dim)
   uint32_t warp_step[3];    // thread-index stride per warp (see runtime/common/utils.cpp)
   uint32_t lmem_size;       // local memory bytes per block
+  uint32_t flags;           // launch classification (see VX_LAUNCH_FLAG_*)
 } vx_kmu_launch_desc_t;
+
+typedef struct {
+  vx_kmu_launch_desc_t desc;
+} vx_kmu_launch_entry_t;
+
+typedef struct {
+  volatile uint32_t head;
+  volatile uint32_t tail;
+  vx_kmu_launch_entry_t entries[LAUNCH_QUEUE_SIZE];
+} vx_kmu_launch_queue_t;
+
+static inline vx_kmu_launch_queue_t* vx_launch_queue() {
+  return (vx_kmu_launch_queue_t*)(uintptr_t)LAUNCH_QUEUE_BASE;
+}
+
+static inline void vx_kmu_launch_signal() {
+  __asm__ volatile (".insn r %0, 1, 0, x0, x0, x0" :: "i"(RISCV_CUSTOM2) : "memory");
+}
 
 // Fill `desc` from a grid/block configuration, matching the host-side
 // `prepare_kernel_launch_params` logic.
@@ -57,14 +78,45 @@ static inline void vx_launch_desc_init(vx_kmu_launch_desc_t* desc,
   desc->warp_step[1] = (threads_per_warp / block_dim[0]) % block_dim[1];
   desc->warp_step[2] = (threads_per_warp / (block_dim[0] * block_dim[1])) % block_dim[2];
   desc->lmem_size  = lmem_size;
+  desc->flags      = 0;
 }
 
-// Fire off a child grid. The descriptor must remain stable in memory long
-// enough for the KMU to latch all fields; because set_csr reads the struct
-// synchronously in simx, the lifetime ends after this call returns.
+static inline void vx_launch_desc_init_tail(vx_kmu_launch_desc_t* desc,
+                                            uint64_t pc,
+                                            uint64_t arg,
+                                            const uint32_t grid_dim[3],
+                                            const uint32_t block_dim[3],
+                                            uint32_t lmem_size) {
+  vx_launch_desc_init(desc, pc, arg, grid_dim, block_dim, lmem_size);
+  desc->flags |= VX_LAUNCH_FLAG_TAIL;
+}
+
+// Enqueue a child grid launch and signal the KMU.
 static inline void vx_kernel_launch(const vx_kmu_launch_desc_t* desc) {
-  vx_fence();
-  csr_write(VX_CSR_KMU_LAUNCH, (size_t)desc);
+  vx_kmu_launch_queue_t* queue = vx_launch_queue();
+
+  while (1) {
+    uint32_t tail = queue->tail;
+    uint32_t head = queue->head;
+    if ((tail - head) >= LAUNCH_QUEUE_SIZE) {
+      __sync_synchronize();
+      continue;
+    }
+    if (__sync_bool_compare_and_swap(&queue->tail, tail, tail + 1)) {
+      uint32_t idx = tail % LAUNCH_QUEUE_SIZE;
+      queue->entries[idx].desc = *desc;
+      __sync_synchronize();
+      vx_fence();
+      vx_kmu_launch_signal();
+      break;
+    }
+  }
+}
+
+static inline void vx_kernel_launch_tail(const vx_kmu_launch_desc_t* desc) {
+  vx_kmu_launch_desc_t tail_desc = *desc;
+  tail_desc.flags |= VX_LAUNCH_FLAG_TAIL;
+  vx_kernel_launch(&tail_desc);
 }
 
 #ifdef __cplusplus

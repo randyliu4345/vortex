@@ -21,6 +21,7 @@
 #include "core.h"
 #include "socket.h"
 #include "cluster.h"
+#include "processor_impl.h"
 #include "constants.h"
 #include "cache_sim.h"
 #include "VX_types.h"
@@ -425,6 +426,15 @@ void SfuUnit::tick() {
 					}
 				}
 			} break;
+			case WctlType::KMU_LAUNCH:
+				output.send(trace, 2+delay);
+				if (trace->eop) {
+					// SimX Stand-in for a signal wired to the KMU.
+					core_->socket()->cluster()->processor()->kmu().signal_launch_request(core_->id());
+				}
+				// fetch_stall=false resumes at decode; warp may already exit before SFU eop.
+				release_warp = false;
+				break;
 			default:
 				std::abort();
 			}

@@ -86,8 +86,9 @@ bool CtaDispatcher::step(const WarpMask& active_warps, uint32_t* wid_out, cta_wa
     if (free_size_ < lmem_needed)
       return false;
 
-    // Reset Warp initialization states on kernel transitions
-    if (pending_cta_.PC != cur_kernel_pc_) {
+    // Reset warp initialization on entry PC change or a new KMU grid (cta_id==0).
+    // Device-side relaunches reuse the same PC, so PC alone is insufficient.
+    if (pending_cta_.PC != cur_kernel_pc_ || pending_cta_.cta_id == 0) {
       cur_kernel_pc_ = pending_cta_.PC;
       for (uint32_t i = 0; i < num_warps_; ++i) {
         warp_init_mask_[i] = false;
@@ -155,6 +156,7 @@ void CtaDispatcher::warp_done(uint32_t wid) {
   wid_to_slot_[wid] = num_warps_;  // clear assignment
   assert(slot_rem_warps_[slot] > 0);
   if (--slot_rem_warps_[slot] == 0) {
+    kmu_->notify_cta_complete();
     // Only advance the head and reclaim memory if the oldest CTA finished.
     // If a younger CTA finishes out-of-order, its rem_warps becomes 0,
     // but its memory is held until the head pointer reaches it.
