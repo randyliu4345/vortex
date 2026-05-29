@@ -104,6 +104,10 @@ IO_COUT_SIZE = 64
 IO_EXIT_CODE = "expr: ($IO_COUT_ADDR + $IO_COUT_SIZE + 8)"
 IO_END_ADDR = "expr: $USER_BASE_ADDR"
 
+# Fixed device-side kernel launch queue in global memory (see kernel/include/vx_launch.h).
+LAUNCH_QUEUE_BASE = "expr: 0x0000000000100000 if $XLEN_64 else 0x00100000"
+LAUNCH_QUEUE_SIZE = 2048
+
 [alu]
 NUM_ALU_LANES = "expr: $SIMD_WIDTH"
 NUM_ALU_BLOCKS = "expr: $ISSUE_WIDTH"

@@ -618,7 +618,6 @@ Word Emulator::get_csr(uint32_t addr, uint32_t wid, uint32_t tid) {
   case VX_CSR_LOCAL_MEM_BASE: return arch_.local_mem_base();
   case VX_CSR_NUM_BARRIERS: return arch_.num_barriers();
   case VX_CSR_MSCRATCH:   return warps_.at(wid).mscratch;
-  case VX_CSR_KMU_LAUNCH: return 0;  // write-only; CSRRW still reads first
 
   case VX_CSR_CTA_ID:       return warps_.at(wid).cta_csrs.cta_id;
   case VX_CSR_CTA_RANK:     return warps_.at(wid).cta_csrs.cta_rank;
@@ -798,11 +797,6 @@ void Emulator::set_csr(uint32_t addr, Word value, uint32_t wid, uint32_t tid) {
   case VX_CSR_MSCRATCH:
     warps_.at(wid).mscratch = value;
     break;
-  case VX_CSR_KMU_LAUNCH: {
-    auto& kmu = core_->socket()->cluster()->processor()->kmu();
-    kmu.request_child_launch(value, core_->id());
-    break;
-  }
   case VX_CSR_SATP:
   #ifdef VM_ENABLE
     mmu_.set_satp(value);

@@ -13,11 +13,18 @@
 
 #include "kmu.h"
 #include "debug.h"
+#include "mem.h"
+#include <VX_config.h>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
 using namespace vortex;
+
+namespace {
+constexpr uint32_t VX_LAUNCH_FLAG_TAIL = 1u << 0;
+}
 
 Kmu::Kmu() {
   this->reset();
@@ -31,13 +38,18 @@ void Kmu::reset() {
   lmem_size_    = 0;
   block_size_   = 0;
   warp_step_[0] = warp_step_[1] = warp_step_[2] = 1;
-  // Reset to load-balanced behavior; the host bumps this via DCR before
-  // start() if a pinned launch was requested.
   core_affinity_= KMU_AFFINITY_ANY;
   running_      = false;
   cta_id_       = 0;
   block_idx_[0] = block_idx_[1] = block_idx_[2] = 0;
-  pending_launches_.clear();
+  launch_pending_           = false;
+  launch_core_id_           = 0;
+  ram_                      = nullptr;
+  grid_total_ctas_          = 0;
+  grid_completed_ctas_      = 0;
+  grid_executing_           = false;
+  active_grid_tail_         = false;
+  tail_stream_outstanding_  = 0;
 }
 
 void Kmu::dcr_write(uint32_t addr, uint32_t value) {
@@ -62,7 +74,22 @@ void Kmu::dcr_write(uint32_t addr, uint32_t value) {
   }
 }
 
+void Kmu::init_grid_tracking() {
+  grid_total_ctas_     = grid_dim_[0] * grid_dim_[1] * grid_dim_[2];
+  grid_completed_ctas_ = 0;
+  grid_executing_      = false;
+}
+
+void Kmu::on_grid_complete() {
+  grid_executing_ = false;
+  if (active_grid_tail_ && tail_stream_outstanding_ > 0)
+    --tail_stream_outstanding_;
+  this->try_drain_launch_queue();
+}
+
 void Kmu::start() {
+  active_grid_tail_ = false;
+  this->init_grid_tracking();
   running_ = (block_size_ > 0)
            && (grid_dim_[0] > 0)
            && (grid_dim_[1] > 0)
@@ -70,6 +97,8 @@ void Kmu::start() {
   if (running_) {
     cta_id_       = 0;
     block_idx_[0] = block_idx_[1] = block_idx_[2] = 0;
+  } else if (grid_total_ctas_ == 0) {
+    this->on_grid_complete();
   }
 }
 
@@ -106,64 +135,124 @@ void Kmu::arm_child(const launch_state_t& state) {
   block_size_    = state.block_size;
   lmem_size_     = state.lmem_size;
   core_affinity_ = state.core_affinity;
-  this->start();
+  this->init_grid_tracking();
+  running_ = (block_size_ > 0)
+           && (grid_dim_[0] > 0)
+           && (grid_dim_[1] > 0)
+           && (grid_dim_[2] > 0);
+  if (running_) {
+    cta_id_       = 0;
+    block_idx_[0] = block_idx_[1] = block_idx_[2] = 0;
+  } else if (grid_total_ctas_ == 0) {
+    this->on_grid_complete();
+  }
+}
+
+void Kmu::attach_ram(RAM* ram) {
+  ram_ = ram;
 }
 
 void Kmu::attach_mem_reader(uint32_t core_id, const mem_reader_t& mem_read) {
   mem_readers_[core_id] = mem_read;
 }
 
-void Kmu::request_child_launch(uint64_t desc_addr, uint32_t core_id) {
+void Kmu::mem_read(void* data, uint64_t addr, uint32_t size, uint32_t core_id) {
   auto it = mem_readers_.find(core_id);
-  if (it == mem_readers_.end()) {
-    std::cerr << "Error: KMU child launch from core #" << core_id
-              << " has no attached memory reader" << std::endl;
-    std::abort();
+  if (it != mem_readers_.end()) {
+    it->second(data, addr, size);
+    return;
   }
-  this->launch_child(desc_addr, it->second);
+  if (ram_ != nullptr) {
+    ram_->read((uint8_t*)data, addr, size);
+    return;
+  }
+  std::cerr << "Error: KMU memory read from core #" << core_id
+            << " has no attached memory reader" << std::endl;
+  std::abort();
 }
 
-void Kmu::launch_child(uint64_t desc_addr, const mem_reader_t& mem_read) {
-  // Layout must match vx_kmu_launch_desc_t in kernel/include/vx_launch.h.
-  launch_state_t state = {};
-  state.core_affinity = KMU_AFFINITY_ANY;
+void Kmu::mem_write(const void* data, uint64_t addr, uint32_t size) {
+  assert(ram_ != nullptr && "KMU launch queue drain requires direct RAM access");
+  ram_->enable_acl(false);
+  ram_->write((const uint8_t*)data, addr, size);
+  ram_->enable_acl(true);
+}
 
-  mem_read(&state.pc,            desc_addr + 0,  sizeof(uint64_t));
-  mem_read(&state.param,         desc_addr + 8,  sizeof(uint64_t));
-  mem_read(state.grid_dim,       desc_addr + 16, sizeof(state.grid_dim));
-  mem_read(state.block_dim,      desc_addr + 28, sizeof(state.block_dim));
-  mem_read(&state.block_size,    desc_addr + 40, sizeof(uint32_t));
-  mem_read(state.warp_step,      desc_addr + 44, sizeof(state.warp_step));
-  mem_read(&state.lmem_size,     desc_addr + 56, sizeof(uint32_t));
-  mem_read(&state.core_affinity, desc_addr + 60, sizeof(uint32_t));
+void Kmu::signal_launch_request(uint32_t core_id) {
+  launch_core_id_ = core_id;
+  launch_pending_ = true;
+}
 
-  DP(3, "*** device kernel launch: pc=0x" << std::hex << state.pc
-     << ", arg=0x" << state.param << std::dec
-     << ", grid=[" << state.grid_dim[0] << "," << state.grid_dim[1] << "," << state.grid_dim[2] << "]"
-     << ", block=[" << state.block_dim[0] << "," << state.block_dim[1] << "," << state.block_dim[2] << "]"
-     << ", core_affinity=" << (state.core_affinity == KMU_AFFINITY_ANY
-                                 ? std::string("ANY")
-                                 : std::to_string(state.core_affinity)));
-
-  if (!running_ && pending_launches_.empty()) {
-    this->arm_child(state);
-  } else {
-    pending_launches_.push_back(state);
+void Kmu::notify_cta_complete() {
+  if (grid_total_ctas_ == 0)
+    return;
+  ++grid_completed_ctas_;
+  if (grid_completed_ctas_ >= grid_total_ctas_) {
+    grid_total_ctas_ = 0;
+    this->on_grid_complete();
   }
+}
+
+void Kmu::try_drain_launch_queue() {
+  if (running_ || grid_executing_ || !launch_pending_)
+    return;
+
+  const uint64_t queue_addr = LAUNCH_QUEUE_BASE;
+  const uint32_t core_id = launch_core_id_;
+
+  while (!running_ && launch_pending_) {
+    uint32_t head = 0;
+    uint32_t tail = 0;
+    this->mem_read(&head, queue_addr + 0, sizeof(uint32_t), core_id);
+    this->mem_read(&tail, queue_addr + 4, sizeof(uint32_t), core_id);
+    if (head == tail) {
+      launch_pending_ = false;
+      return;
+    }
+
+    vx_kmu_launch_desc_t desc;
+    static_assert(sizeof(desc) == 68, "layout must match vx_kmu_launch_entry_t");
+    uint32_t idx = head % LAUNCH_QUEUE_SIZE;
+    uint64_t entry_addr = queue_addr + 8 + uint64_t(idx) * sizeof(desc);
+    this->mem_read(&desc, entry_addr, sizeof(desc), core_id);
+
+    if ((desc.flags & VX_LAUNCH_FLAG_TAIL) && tail_stream_outstanding_ > 0)
+      return;
+
+    this->launch_child(desc);
+
+    ++head;
+    this->mem_write(&head, queue_addr + 0, sizeof(uint32_t));
+  }
+}
+
+void Kmu::launch_child(const vx_kmu_launch_desc_t& desc) {
+  uint32_t grid_dim[3];
+  uint32_t block_dim[3];
+  uint32_t warp_step[3];
+  std::memcpy(grid_dim, desc.grid_dim, sizeof(grid_dim));
+  std::memcpy(block_dim, desc.block_dim, sizeof(block_dim));
+  std::memcpy(warp_step, desc.warp_step, sizeof(warp_step));
+  DP(3, "*** device kernel launch: pc=0x" << std::hex << desc.pc
+     << ", arg=0x" << desc.arg << std::dec
+     << ", grid=[" << grid_dim[0] << "," << grid_dim[1] << "," << grid_dim[2] << "]"
+     << ", block=[" << block_dim[0] << "," << block_dim[1] << "," << block_dim[2] << "]"
+     << ", core_affinity=" << (desc.core_affinity == KMU_AFFINITY_ANY
+                                 ? std::string("ANY")
+                                 : std::to_string(desc.core_affinity))
+     << ", tail=" << ((desc.flags & VX_LAUNCH_FLAG_TAIL) != 0));
+  active_grid_tail_ = (desc.flags & VX_LAUNCH_FLAG_TAIL) != 0;
+  if (active_grid_tail_)
+    ++tail_stream_outstanding_;
+  this->arm_child(desc.pc, desc.arg, grid_dim, block_dim,
+                  desc.block_size, warp_step, desc.lmem_size, desc.core_affinity);
 }
 
 bool Kmu::step(uint32_t core_id, kmu_req_t* req) {
   if (!running_) {
-    if (pending_launches_.empty())
-      return false;
-    const auto& state = pending_launches_.front();
-    if (state.core_affinity != KMU_AFFINITY_ANY && state.core_affinity != core_id)
-      return false;
-    this->arm_child(state);
-    pending_launches_.pop_front();
+    this->try_drain_launch_queue();
+    return false;
   }
-  // Affinity gate: only the pinned core (if any) is allowed to dequeue.
-  // Other cores see the queue as empty even though it is still draining.
   if (core_affinity_ != KMU_AFFINITY_ANY && core_affinity_ != core_id)
     return false;
 
@@ -185,7 +274,6 @@ bool Kmu::step(uint32_t core_id, kmu_req_t* req) {
   req->warp_step[1] = warp_step_[1];
   req->warp_step[2] = warp_step_[2];
 
-  // Advance the CTA iterator (X-innermost, Z-outermost)
   ++cta_id_;
   uint32_t bx = block_idx_[0] + 1;
   if (bx == grid_dim_[0]) {
@@ -197,6 +285,12 @@ bool Kmu::step(uint32_t core_id, kmu_req_t* req) {
       if (bz == grid_dim_[2]) {
         block_idx_[2] = 0;
         running_ = false;
+        if (grid_total_ctas_ == 0) {
+          this->on_grid_complete();
+        } else {
+          grid_executing_ = true;
+        }
+        this->try_drain_launch_queue();
       } else {
         block_idx_[2] = bz;
       }

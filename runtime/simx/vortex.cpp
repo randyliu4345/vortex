@@ -57,6 +57,7 @@ public:
     std::cout << "*** VM ENABLED!! ***" << std::endl;
     CHECK_ERR(init_VM(), );
 #endif
+    CHECK_ERR(init_launch_queue(), );
   }
 
   ~vx_device() {
@@ -336,6 +337,11 @@ public:
   }
 
   int start() {
+    uint32_t zero = 0;
+    ram_.enable_acl(false);
+    ram_.write((const uint8_t*)&zero, LAUNCH_QUEUE_BASE + 0, sizeof(zero));
+    ram_.write((const uint8_t*)&zero, LAUNCH_QUEUE_BASE + 4, sizeof(zero));
+    ram_.enable_acl(true);
     // DCRs already written by stub; just trigger execution
     future_ = std::async(std::launch::async, [&] {
       processor_.run();
@@ -620,6 +626,23 @@ private:
   MemoryAllocator *page_table_mem_;
   MemoryAllocator *virtual_mem_;
 #endif
+
+  int init_launch_queue() {
+    constexpr uint64_t queue_bytes = 8ull + LAUNCH_QUEUE_SIZE * 64ull;
+    CHECK_ERR(global_mem_.reserve(LAUNCH_QUEUE_BASE, queue_bytes), {
+      return err;
+    });
+    CHECK_ERR(this->mem_access(LAUNCH_QUEUE_BASE, queue_bytes, VX_MEM_READ_WRITE), {
+      global_mem_.release(LAUNCH_QUEUE_BASE);
+      return err;
+    });
+    uint32_t zero = 0;
+    ram_.enable_acl(false);
+    ram_.write((const uint8_t*)&zero, LAUNCH_QUEUE_BASE + 0, sizeof(zero));
+    ram_.write((const uint8_t*)&zero, LAUNCH_QUEUE_BASE + 4, sizeof(zero));
+    ram_.enable_acl(true);
+    return 0;
+  }
 };
 
 #include <callbacks.inc>

@@ -15,25 +15,22 @@
   } while (false)
 
 const char* kernel_file = "kernel.vxbin";
-uint32_t launches = 2;
 bool print_words = true;
 
 vx_device_h device = nullptr;
 vx_buffer_h krnl_buffer = nullptr;
 vx_buffer_h parent_args_buffer = nullptr;
-vx_buffer_h child_args_buffer = nullptr;
 
 static void show_usage() {
-  std::cout << "Vortex dyn_launch (KMU device launch, hello-world)." << std::endl;
-  std::cout << "Usage: [-k: kernel] [-l launches] [-q quiet] [-h: help]" << std::endl;
+  std::cout << "Vortex dyn_launch (parent/child/tail via KMU tail stream)." << std::endl;
+  std::cout << "Usage: [-k: kernel] [-q quiet] [-h: help]" << std::endl;
 }
 
 static void parse_args(int argc, char **argv) {
   int c;
-  while ((c = getopt(argc, argv, "k:l:qh")) != -1) {
+  while ((c = getopt(argc, argv, "k:qh")) != -1) {
     switch (c) {
     case 'k': kernel_file = optarg; break;
-    case 'l': launches = atoi(optarg); break;
     case 'q': print_words = false; break;
     case 'h': show_usage(); exit(0);
     default:  show_usage(); exit(-1);
@@ -45,7 +42,6 @@ void cleanup() {
   if (device) {
     if (krnl_buffer) vx_mem_free(krnl_buffer);
     if (parent_args_buffer) vx_mem_free(parent_args_buffer);
-    if (child_args_buffer) vx_mem_free(child_args_buffer);
     vx_dev_close(device);
   }
 }
@@ -73,24 +69,14 @@ int main(int argc, char *argv[]) {
 
   std::cout << "upload kernel" << std::endl;
   RT_CHECK(vx_upload_kernel_file(device, kernel_file, &krnl_buffer));
-  uint64_t krnl_addr = 0;
-  RT_CHECK(vx_mem_address(krnl_buffer, &krnl_addr));
-
-  RT_CHECK(vx_mem_alloc(device, sizeof(kernel_arg_t), VX_MEM_READ_WRITE, &child_args_buffer));
-  uint64_t child_addr = 0;
-  RT_CHECK(vx_mem_address(child_args_buffer, &child_addr));
 
   kernel_arg_t parent_arg = {};
-  parent_arg.role = DL_ROLE_PARENT;
-  parent_arg.launches_remaining = launches;
   parent_arg.print_words = print_words ? 1u : 0u;
-  parent_arg.child_pc = krnl_addr;
-  parent_arg.child_arg_addr = child_addr;
 
-  std::cout << "upload parent args" << std::endl;
+  std::cout << "upload args" << std::endl;
   RT_CHECK(vx_upload_bytes(device, &parent_arg, sizeof(parent_arg), &parent_args_buffer));
 
-  std::cout << "start device (expect device prints: Hello World!)" << std::endl;
+  std::cout << "start parent kernel (expect device prints: Hello World!)" << std::endl;
   uint32_t grid_dim[1]  = { 1 };
   uint32_t block_dim[1] = { 1 };
   RT_CHECK(vx_start_g(device, krnl_buffer, parent_args_buffer, 1, grid_dim, block_dim, 0));

@@ -15,16 +15,26 @@
 
 #include <cstdint>
 #include <functional>
-#include <deque>
 #include <unordered_map>
 #include "VX_types.h"
 
 namespace vortex {
 
-// Sentinel value matching VORTEX_AFFINITY_ANY in the kernel/host APIs.
-// When stored on a kernel descriptor, the HKS load-balances dispatch
-// across all cores instead of pinning to a single core.
+class RAM;
+
 static constexpr uint32_t KMU_AFFINITY_ANY = 0xFFFFFFFFu;
+
+struct __attribute__((packed)) vx_kmu_launch_desc_t {
+  uint64_t pc;
+  uint64_t arg;
+  uint32_t grid_dim[3];
+  uint32_t block_dim[3];
+  uint32_t block_size;
+  uint32_t warp_step[3];
+  uint32_t lmem_size;
+  uint32_t core_affinity;
+  uint32_t flags;
+};
 
 struct kmu_req_t {
   uint64_t PC;
@@ -48,14 +58,8 @@ public:
 
   void dcr_write(uint32_t addr, uint32_t value);
 
-  // Called by ProcessorImpl::run() to arm a kernel launch.
   void start();
 
-  // Device-initiated re-arm (dynamic parallelism). Overrides the current KMU
-  // state in one shot and starts dispatching CTAs. The caller must ensure the
-  // KMU is idle (no CTAs left to dispatch) before invoking this.
-  // `core_affinity` pins the grid to a single global core_id; pass
-  // KMU_AFFINITY_ANY to load-balance across all cores.
   void arm_child(uint64_t pc,
                  uint64_t param,
                  const uint32_t grid_dim[3],
@@ -63,40 +67,30 @@ public:
                  uint32_t block_size,
                  const uint32_t warp_step[3],
                  uint32_t lmem_size,
-                 uint32_t core_affinity);
+                 uint32_t core_affinity = KMU_AFFINITY_ANY);
 
-  // Attach the memory read path used when a device-side launch request arrives
-  // from a given core.
+  void attach_ram(RAM* ram);
+
   void attach_mem_reader(uint32_t core_id, const mem_reader_t& mem_read);
 
-  // Device-initiated launch request through VX_CSR_KMU_LAUNCH. This models the
-  // CSR write as a launch signal into the KMU, carrying the descriptor address
-  // and source core rather than descriptor decoding logic.
-  void request_child_launch(uint64_t desc_addr, uint32_t core_id);
+  void signal_launch_request(uint32_t core_id);
 
-  // True while CTAs or queued device-side launches remain to be issued.
-  bool running() const { return running_ || !pending_launches_.empty(); }
+  bool running() const { return running_ || launch_pending_; }
 
-  // Returns true if any pending CTAs are eligible for dispatch onto this
-  // core. Cores not matching the configured affinity should treat the KMU
-  // as idle so they can early-exit instead of busy-waiting.
+  bool launch_pending() const { return launch_pending_; }
+
+  void service_launch_queue() { this->try_drain_launch_queue(); }
+
   bool running_for_core(uint32_t core_id) const {
-    if (running_)
-      return (core_affinity_ == KMU_AFFINITY_ANY) || (core_affinity_ == core_id);
-    if (pending_launches_.empty())
+    if (!running_)
       return false;
-    auto affinity = pending_launches_.front().core_affinity;
-    return (affinity == KMU_AFFINITY_ANY) || (affinity == core_id);
+    return (core_affinity_ == KMU_AFFINITY_ANY) || (core_affinity_ == core_id);
   }
 
-  // Returns the global core_id this kernel is pinned to, or KMU_AFFINITY_ANY.
   uint32_t core_affinity() const { return core_affinity_; }
 
-  // Called by CtaDispatcher when ready for the next CTA. The `core_id` of
-  // the requesting CTA dispatcher is matched against the per-kernel
-  // affinity: if the kernel is pinned to a different core, the call returns
-  // false and the iterator is left untouched. Returns false when the grid is
-  // exhausted or the calling core is not eligible to dequeue.
+  void notify_cta_complete();
+
   bool step(uint32_t core_id, kmu_req_t* req);
 
 private:
@@ -122,13 +116,23 @@ private:
   bool     running_;
   uint32_t cta_id_;
   uint32_t block_idx_[3];
+  bool     launch_pending_;
+  uint32_t launch_core_id_;
+  RAM*     ram_;
   std::unordered_map<uint32_t, mem_reader_t> mem_readers_;
-  // Device-side parents can issue launches faster than dispatchers dequeue
-  // CTAs. Queue decoded descriptors so later launches do not overwrite the
-  // current KMU state before becoming visible to an eligible core.
-  std::deque<launch_state_t> pending_launches_;
 
-  void launch_child(uint64_t desc_addr, const mem_reader_t& mem_read);
+  uint32_t grid_total_ctas_;
+  uint32_t grid_completed_ctas_;
+  bool     grid_executing_;
+  bool     active_grid_tail_;
+  uint32_t tail_stream_outstanding_;
+
+  void mem_read(void* data, uint64_t addr, uint32_t size, uint32_t core_id);
+  void mem_write(const void* data, uint64_t addr, uint32_t size);
+  void init_grid_tracking();
+  void on_grid_complete();
+  void try_drain_launch_queue();
+  void launch_child(const vx_kmu_launch_desc_t& desc);
   void arm_child(const launch_state_t& state);
 };
 
