@@ -7,3 +7,4 @@
 - [Simulation](simulation.md): Details for building and running each simulation driver
 - [Contributing](contributing.md): Process for contributing your own features including repo semantics and testing
 - [Debugging](debugging.md): Debugging configurations for each Vortex driver
+- [Dynamic CFG Recovery](cfg_recovery.md): SimX trace → warp-aware CFG (agentic research stub)
