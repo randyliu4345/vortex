@@ -179,6 +179,13 @@ def parse_simx_log(log_path: Path) -> ParsedTrace:
         return parse_simx_lines(f)
 
 
+def load_events_json(path: Path) -> ParsedTrace:
+    data = json.loads(path.read_text())
+    config = SimxConfig(**data["config"])
+    events = [InstructionEvent(**item) for item in data["events"]]
+    return ParsedTrace(config=config, events=events)
+
+
 def write_events_json(parsed: ParsedTrace, out_path: Path) -> None:
     payload = {
         "config": asdict(parsed.config),

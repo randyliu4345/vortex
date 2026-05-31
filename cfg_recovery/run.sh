@@ -57,10 +57,11 @@ else
   PC_MAP=""
 fi
 
-echo "[cfg_recovery] build cfg"
-python3 "$SCRIPT_DIR/build_cfg.py" "$LOG" -o "$OUT_DIR/cfg.json" $PC_MAP
+echo "[cfg_recovery] warp paths (M3)"
+python3 "$SCRIPT_DIR/build_cfg.py" "$OUT_DIR/events.json" -o "$OUT_DIR/warp_paths.json"
 
-echo "[cfg_recovery] visualize"
-python3 "$SCRIPT_DIR/visualize.py" "$OUT_DIR/cfg.json" -o "$OUT_DIR/cfg.png"
+echo "[cfg_recovery] visualize warp 0 (sample)"
+python3 "$SCRIPT_DIR/visualize.py" "$OUT_DIR/warp_paths.json" -o "$OUT_DIR/warp0.png" --warp 0
 
 echo "[cfg_recovery] done → $OUT_DIR"
+echo "[cfg_recovery] Wave 3: build_cfg.py --cfg for full cfg.json"
