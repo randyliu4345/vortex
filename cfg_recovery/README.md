@@ -2,25 +2,34 @@
 
 Recover control-flow graphs from SimX debug traces of GPU kernels (warp-aware, with divergence annotations).
 
-**Documentation:** [docs/cfg_recovery.md](../docs/cfg_recovery.md) — milestones, validation, and agent workflow.
-
-## Quick start (stub)
-
-```sh
-# 1. Capture a trace (from repo root)
-./ci/blackbox.sh --driver=simx --app=diverge --debug=3 --log=cfg_recovery/run.log
-
-# 2. Run the pipeline (stubs raise NotImplementedError until implemented)
-./cfg_recovery/run.sh cfg_recovery/run.log
-```
+**Documentation:** [docs/cfg_recovery.md](../docs/cfg_recovery.md)
 
 ## Layout
 
-| File | Role |
-|------|------|
-| `parse_simx.py` | `run.log` → normalized instruction events |
-| `pc_map.py` | Kernel ELF → PC → symbol map |
-| `build_cfg.py` | Events → basic blocks, edges, divergence metadata |
-| `visualize.py` | `cfg.json` → Graphviz `.dot` / `.png` |
-| `run.sh` | End-to-end driver |
-| `tests/` | Unit tests and log fixtures |
+| Location | Contents |
+|----------|----------|
+| `cfg_recovery/` (repo) | Versioned Python tools and tests |
+| `build/cfg_recovery/` | Generated logs and JSON/PNG outputs (after `../configure`) |
+
+## Quick start
+
+All build and trace steps run from **`build/`** (see Vortex README: `cd build && ../configure ...`).
+
+```sh
+cd build
+source ci/toolchain_env.sh
+make -s
+DEBUG=3 make -C runtime/simx
+
+# M0: capture trace → build/cfg_recovery/run.log
+../cfg_recovery/capture_trace.sh tests/regression/diverge -n4
+
+# M1/M2 + pipeline (from repo root or build/)
+../cfg_recovery/run.sh
+# or, from build/:
+../cfg_recovery/run.sh cfg_recovery/run.log tests/regression/diverge/kernel.elf
+```
+
+```sh
+python3 -m unittest discover -s ../cfg_recovery/tests -v
+```

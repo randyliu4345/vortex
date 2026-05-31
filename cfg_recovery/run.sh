@@ -12,20 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# End-to-end CFG recovery pipeline (stub).
-# Usage: ./cfg_recovery/run.sh [run.log] [kernel.elf]
+# End-to-end CFG recovery pipeline.
+# Artifacts live under the Vortex *build* tree (see docs/cfg_recovery.md).
+#
+# Usage (from repo root):
+#   ./cfg_recovery/run.sh
+#   ./cfg_recovery/run.sh build/cfg_recovery/run.log build/tests/regression/diverge/kernel.elf
+#
+# Usage (from build/):
+#   ../cfg_recovery/run.sh cfg_recovery/run.log tests/regression/diverge/kernel.elf
 
 set -e
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+VORTEX_HOME=$(cd "$SCRIPT_DIR/.." && pwd)
 
-LOG=${1:-"$SCRIPT_DIR/run.log"}
-ELF=${2:-""}
-OUT_DIR=${CFG_RECOVERY_OUT:-"$SCRIPT_DIR/out"}
+# Resolve build directory: prefer cwd if it is the configured build root.
+if [ -f "./config.mk" ] && grep -q "INSTALLDIR" ./config.mk 2>/dev/null; then
+  BUILD_DIR=$(pwd)
+else
+  BUILD_DIR=${VORTEX_BUILD:-$VORTEX_HOME/build}
+fi
+
+OUT_DIR=${CFG_RECOVERY_OUT:-"$BUILD_DIR/cfg_recovery/out"}
+LOG=${1:-"$BUILD_DIR/cfg_recovery/run.log"}
+ELF=${2:-"$BUILD_DIR/tests/regression/diverge/kernel.elf"}
 
 mkdir -p "$OUT_DIR"
 
+# pc_map.py reads TOOLDIR from ./config.mk when cwd is build/
+if [ -f "$BUILD_DIR/config.mk" ]; then
+  cd "$BUILD_DIR"
+fi
+
+echo "[cfg_recovery] build dir: $BUILD_DIR"
 echo "[cfg_recovery] parse: $LOG"
 python3 "$SCRIPT_DIR/parse_simx.py" "$LOG" -o "$OUT_DIR/events.json"
 

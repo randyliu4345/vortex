@@ -53,11 +53,26 @@ class PcMap:
     symbols: list[SymbolEntry]
 
 
+def _tooldir_from_build_config() -> str | None:
+    """Read TOOLDIR from ./config.mk when run from Vortex build/."""
+    config = Path("config.mk")
+    if not config.is_file():
+        return None
+    for line in config.read_text().splitlines():
+        if line.startswith("TOOLDIR"):
+            _, _, value = line.partition("?=" if "?=" in line else "=")
+            return value.strip()
+    return None
+
+
 def resolve_objdump(explicit: str | None = None) -> str:
     if explicit:
         return explicit
     candidates = []
     llvm_vortex = os.environ.get("LLVM_VORTEX")
+    tooldir = os.environ.get("TOOLDIR") or _tooldir_from_build_config()
+    if not llvm_vortex and tooldir:
+        llvm_vortex = str(Path(tooldir) / "llvm-vortex")
     if llvm_vortex:
         candidates.append(Path(llvm_vortex) / "bin" / "llvm-objdump")
     riscv_path = os.environ.get("RISCV_TOOLCHAIN_PATH")

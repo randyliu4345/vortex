@@ -2,16 +2,55 @@
 
 Recover **dynamic control-flow graphs** from Vortex **SimX** debug traces: basic blocks, edges, warp divergence, and reconvergence. Ground-truth workload: `tests/regression/diverge`.
 
-**Code:** `cfg_recovery/`  
-**Pipeline:** `cfg_recovery/run.sh`
+**Tools (versioned):** `cfg_recovery/` in the repo  
+**Artifacts (generated):** `build/cfg_recovery/` after `../configure`  
+**Pipeline:** `cfg_recovery/run.sh` (writes under `build/cfg_recovery/out/`)
 
-**Status:** Wave 1 complete (M1 `parse_simx.py`, M2 `pc_map.py`). Wave 2+ pending.
+**Status:** Wave 1 complete (M1 `parse_simx.py`, M2 `pc_map.py`). M0 trace captured under `build/cfg_recovery/`.
 
 ```sh
-python3 -m unittest cfg_recovery.tests.test_parse cfg_recovery.tests.test_pc_map -v
-python3 cfg_recovery/parse_simx.py cfg_recovery/tests/fixtures/diverge_snippet.log -o /tmp/events.json
-python3 cfg_recovery/pc_map.py <kernel.elf> -o /tmp/pc_map.json
+# Unit tests (from repo root)
+python3 -m unittest discover -s cfg_recovery/tests -v
+
+# Full flow — always start in build/
+cd build
+source ci/toolchain_env.sh
+make -s
+../cfg_recovery/capture_trace.sh tests/regression/diverge -n4
+../cfg_recovery/run.sh
 ```
+
+### M0 setup (Quick Start)
+
+Vortex is configured and built **only from `build/`**:
+
+```sh
+mkdir -p build && cd build
+../configure --xlen=32 --tooldir=$HOME/tools
+source ci/toolchain_env.sh
+make -s
+```
+
+Do **not** symlink `config.mk` into the repo root. Makefiles under `build/` set `ROOT_DIR` to the build tree, where `config.mk` lives.
+
+**Trace capture** (writes `build/cfg_recovery/run.log`):
+
+```sh
+cd build
+source ci/toolchain_env.sh
+DEBUG=3 make -C runtime/simx
+../cfg_recovery/capture_trace.sh tests/regression/diverge -n4
+```
+
+**Parse / pc_map** (defaults point at `build/cfg_recovery/` and `build/tests/.../kernel.elf`):
+
+```sh
+../cfg_recovery/run.sh
+# or explicitly:
+../cfg_recovery/run.sh cfg_recovery/run.log tests/regression/diverge/kernel.elf
+```
+
+`pc_map.py` reads `TOOLDIR` from the environment (set `export TOOLDIR=...` from `build/config.mk` if needed).
 
 ---
 
@@ -31,14 +70,13 @@ python3 cfg_recovery/pc_map.py <kernel.elf> -o /tmp/pc_map.json
 ### M0 — Baseline
 
 ```sh
-cd /path/to/vortex
-./ci/blackbox.sh --driver=simx --app=diverge --debug=3 --log=cfg_recovery/run.log
-python3 ci/trace_csv.py -t simx cfg_recovery/run.log -o cfg_recovery/trace.csv
+cd build
+source ci/toolchain_env.sh
+../cfg_recovery/capture_trace.sh tests/regression/diverge -n4
+python3 ../ci/trace_csv.py -t simx cfg_recovery/run.log -o cfg_recovery/trace.csv
 ```
 
-Start with small workloads: `OPTS=-n4` in the diverge Makefile (or pass `--args=-n4` if wired).
-
-Find kernel ELF after build (typical location under `tests/regression/diverge` build tree / `VORTEX_RT_PATH`).
+Kernel ELF: `build/tests/regression/diverge/kernel.elf`
 
 ### M1 — Parser
 
