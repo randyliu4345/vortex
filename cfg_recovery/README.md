@@ -32,4 +32,9 @@ DEBUG=3 make -C runtime/simx
 
 ```sh
 python3 -m unittest discover -s ../cfg_recovery/tests -v
+
+# Full project demo (after configure + make)
+../cfg_recovery/demo.sh tests/regression/cfg_diverge_lab
 ```
+
+Regression apps: `tests/regression/cfg_diverge_lab`, `tests/regression/cfg_diverge_obf` (re-run `../configure` in `build/` once).

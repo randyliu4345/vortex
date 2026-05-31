@@ -56,6 +56,9 @@ if [ ! -x "$BIN" ]; then
 fi
 
 echo "[cfg_recovery] running $BIN $ARGS → $LOG"
-LD_LIBRARY_PATH="$BUILD_DIR/runtime" VORTEX_DRIVER=simx "$BIN" $ARGS >"$LOG" 2>&1
+(
+  cd "$APP_DIR"
+  LD_LIBRARY_PATH="$BUILD_DIR/runtime" VORTEX_DRIVER=simx "./$(basename "$BIN")" $ARGS
+) >"$LOG" 2>&1
 COUNT=$(grep -c 'DEBUG Instr' "$LOG" || true)
 echo "[cfg_recovery] $COUNT DEBUG Instr lines in $LOG"

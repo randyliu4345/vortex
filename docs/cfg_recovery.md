@@ -6,7 +6,7 @@ Recover **dynamic control-flow graphs** from Vortex **SimX** debug traces: basic
 **Artifacts (generated):** `build/cfg_recovery/` after `../configure`  
 **Pipeline:** `cfg_recovery/run.sh` (writes under `build/cfg_recovery/out/`)
 
-**Status:** Wave 3 complete (M4 basic blocks, M5 dynamic CFG). Wave 4: M6–M7 eval and obfuscated kernels.
+**Status:** Wave 4 complete (M6 lab kernels, M7 eval, demo script).
 
 ```sh
 # Unit tests (from repo root)
@@ -64,8 +64,8 @@ DEBUG=3 make -C runtime/simx
 | M3 | Per-warp paths | Edge list per `warp_id` from events | `build_cfg.py` |
 | M4 | Dynamic basic blocks | Blocks from PC runs + branch cuts | `build_cfg.py` |
 | M5 | CFG + annotations | `cfg.json` + Graphviz output | `build_cfg.py`, `visualize.py` |
-| M6 | Agent playbook + obfuscated kernel | Documented iteration; second kernel | `docs/` + `tests/` |
-| M7 | Evaluation | Rubric pass on `diverge` | `tests/` + report |
+| M6 | Lab + obfuscated kernels | `cfg_diverge_lab`, `cfg_diverge_obf` regression apps | `tests/regression/` |
+| M7 | Evaluation | `eval.py` rubric; `test_cfg_quality.py` | `cfg_recovery/eval.py` |
 
 ### M0 — Baseline
 
@@ -109,18 +109,45 @@ Per `warp_id`, ordered transitions:
 - Flags: `is_divergence_point`, `is_merge_point`, `divergent` on edges.
 - `visualize.py` → `cfg.dot` / `cfg.png` (red edges = divergent).
 
-### M6 — Agent loop
+### M6 — Lab kernels
 
-See [Agent orchestration](#agent-orchestration) below.
+| App | Purpose |
+|-----|---------|
+| `tests/regression/cfg_diverge_lab` | Small kernel with documented `if` / `loop` / `switch` (CFG ground truth) |
+| `tests/regression/cfg_diverge_obf` | Same logic + opaque predicates (harder static reading) |
+
+After adding apps, re-run `../configure` in `build/`, then `make -s`.
 
 ### M7 — Evaluation
 
-| Check | Criterion |
-|-------|-----------|
-| Coverage | ≥95% of PCs in trace appear in CFG |
-| Soundness | Every CFG edge observed in trace |
-| Divergence | Known branch regions in `diverge` annotated |
-| Cross-warp | Warps with different `task_id` differ where expected |
+```sh
+python3 cfg_recovery/eval.py build/cfg_recovery/out/events.json build/cfg_recovery/out/cfg.json
+```
+
+| Metric | Threshold | Meaning |
+|--------|-----------|---------|
+| `pc_coverage` | ≥ 0.95 | Fraction of warp events whose PC lies in some CFG block |
+| `edge_soundness` | ≥ 0.95 | Fraction of CFG edges matching a path transition |
+| `divergent_edges` | ≥ 1 | At least one annotated divergent edge |
+
+### Demo (M0–M7)
+
+```sh
+cd build && source ci/toolchain_env.sh
+../configure   # picks up cfg_diverge_lab / cfg_diverge_obf
+make -s
+../cfg_recovery/demo.sh tests/regression/cfg_diverge_lab
+# Obfuscated variant:
+../cfg_recovery/demo.sh tests/regression/cfg_diverge_obf
+```
+
+Artifacts: `build/cfg_recovery/out/demo/` (`eval.json`, `cfg_warp0.dot`, …).
+
+### Agent iteration example (documented fix)
+
+1. **Symptom:** CFG edges used PC-only block IDs; loop re-entry collapsed blocks.
+2. **Fix:** Key blocks by `first_uuid`; map path edges via instruction UUID.
+3. **Verify:** `python3 -m unittest discover -s cfg_recovery/tests`; re-run `eval.py` on `diverge` trace.
 
 ---
 

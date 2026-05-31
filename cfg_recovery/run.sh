@@ -66,4 +66,7 @@ python3 "$SCRIPT_DIR/build_cfg.py" "$OUT_DIR/events.json" --cfg -o "$OUT_DIR/cfg
 echo "[cfg_recovery] visualize CFG warp 0"
 python3 "$SCRIPT_DIR/visualize.py" "$OUT_DIR/cfg.json" -o "$OUT_DIR/cfg_warp0.png" --warp 0
 
+echo "[cfg_recovery] evaluate (M7)"
+python3 "$SCRIPT_DIR/eval.py" "$OUT_DIR/events.json" "$OUT_DIR/cfg.json" -o "$OUT_DIR/eval.json" --warp 0
+
 echo "[cfg_recovery] done → $OUT_DIR"
