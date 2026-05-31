@@ -71,11 +71,12 @@ def cfg_to_dot(cfg: dict[str, Any], warp_id: int | None = None) -> str:
     lines = ["digraph cfg {", '  rankdir="LR";', "  node [shape=box, fontsize=10];"]
     for warp in cfg.get("warps", []):
         wid = warp["warp_id"]
+        cid = warp.get("core_id", 0)
         if warp_id is not None and wid != warp_id:
             continue
-        subgraph = f"cluster_warp_{wid}"
+        subgraph = f"cluster_c{cid}_w{wid}"
         lines.append(f"  subgraph {subgraph} {{")
-        lines.append(f'    label="warp {wid}";')
+        lines.append(f'    label="core {cid} warp {wid}";')
         for block in warp.get("blocks", []):
             node_id = _dot_escape(block["block_id"])
             start = block["start_pc"]

@@ -29,6 +29,7 @@ from parse_simx import (
     load_events_json,
     parse_simx_log,
 )
+from pc_map import SymbolEntry, load_pc_map_json, lookup_pc
 
 BRANCH_OPCODE = re.compile(
     r"\b(BR|JAL|JALR|BEQ|BNE|BLT|BGE|BLTU|BGEU|CBEQZ|CBNEZ|C\.J|C\.JR|C\.JAL|C\.BEQZ|C\.BNEZ)\b",
@@ -88,6 +89,8 @@ class CfgBlock:
     warp_id: int
     start_pc: str
     end_pc: str
+    first_uuid: int = 0
+    last_uuid: int = 0
     symbol: str | None = None
     is_merge_point: bool = False
     is_divergence_point: bool = False
@@ -96,6 +99,7 @@ class CfgBlock:
 @dataclass
 class WarpCfg:
     warp_id: int
+    core_id: int = 0
     blocks: list[CfgBlock] = field(default_factory=list)
     edges: list[CfgEdge] = field(default_factory=list)
 
@@ -179,17 +183,164 @@ def load_parsed(input_path: Path) -> ParsedTrace:
     return parse_simx_log(input_path)
 
 
-def build_basic_blocks(warp_paths: list[WarpPath]) -> dict[int, list[CfgBlock]]:
-    """TODO(M4): Segment paths into dynamic basic blocks."""
-    raise NotImplementedError("build_basic_blocks is a stub — implement in M4")
+def _block_id(core_id: int, warp_id: int, first_uuid: int) -> str:
+    return f"c{core_id}w{warp_id}_#{first_uuid}"
+
+
+def build_basic_blocks_for_warp(
+    events: list[InstructionEvent],
+    warp_id: int,
+    core_id: int,
+    symbols: list[SymbolEntry] | None = None,
+) -> tuple[list[CfgBlock], dict[int, CfgBlock]]:
+    """Maximal fallthrough sequences from ordered warp events."""
+    if not events:
+        return [], {}
+
+    blocks: list[CfgBlock] = []
+    uuid_block: dict[int, CfgBlock] = {}
+    index = 0
+    while index < len(events):
+        first = events[index]
+        start_pc = first.pc
+        end_pc = start_pc
+        last = first
+        cursor = index
+        while cursor + 1 < len(events) and is_fallthrough(events[cursor].pc, events[cursor + 1].pc):
+            cursor += 1
+            last = events[cursor]
+            end_pc = last.pc
+        symbol = None
+        if symbols:
+            hit = lookup_pc(pc_to_int(start_pc), symbols)
+            symbol = hit.symbol
+        block = CfgBlock(
+            block_id=_block_id(core_id, warp_id, first.uuid),
+            warp_id=warp_id,
+            start_pc=start_pc,
+            end_pc=end_pc,
+            first_uuid=first.uuid,
+            last_uuid=last.uuid,
+            symbol=symbol,
+        )
+        for i in range(index, cursor + 1):
+            uuid_block[events[i].uuid] = block
+        blocks.append(block)
+        index = cursor + 1
+    return blocks, uuid_block
+
+
+def build_basic_blocks(
+    parsed: ParsedTrace,
+    symbols: list[SymbolEntry] | None = None,
+) -> tuple[dict[tuple[int, int], list[CfgBlock]], dict[tuple[int, int], dict[int, CfgBlock]]]:
+    blocks_map: dict[tuple[int, int], list[CfgBlock]] = {}
+    uuid_maps: dict[tuple[int, int], dict[int, CfgBlock]] = {}
+    for (core_id, warp_id), events in _group_events_by_warp(parsed.events).items():
+        blocks, uuid_block = build_basic_blocks_for_warp(events, warp_id, core_id, symbols)
+        blocks_map[(core_id, warp_id)] = blocks
+        uuid_maps[(core_id, warp_id)] = uuid_block
+    return blocks_map, uuid_maps
+
+
+def _annotate_block_points(
+    blocks: list[CfgBlock],
+    path_edges: list[WarpPathEdge],
+    uuid_block: dict[int, CfgBlock],
+) -> None:
+    outgoing: dict[str, set[str]] = {}
+    incoming: dict[str, set[str]] = {}
+
+    for edge in path_edges:
+        src_block = uuid_block.get(edge.src_uuid)
+        dst_block = uuid_block.get(edge.dst_uuid)
+        if not src_block or not dst_block:
+            continue
+        outgoing.setdefault(src_block.block_id, set()).add(dst_block.block_id)
+        incoming.setdefault(dst_block.block_id, set()).add(src_block.block_id)
+
+    for block in blocks:
+        outs = outgoing.get(block.block_id, set())
+        ins = incoming.get(block.block_id, set())
+        if len(outs) > 1:
+            block.is_divergence_point = True
+        if len(ins) > 1:
+            block.is_merge_point = True
+        exit_edges = [e for e in path_edges if e.src_uuid == block.last_uuid]
+        if any(e.kind == "branch" or is_branch_opcode(e.opcode) for e in exit_edges):
+            block.is_divergence_point = True
+
+
+def build_warp_cfg(
+    path: WarpPath,
+    blocks: list[CfgBlock],
+    uuid_block: dict[int, CfgBlock],
+) -> WarpCfg:
+    _annotate_block_points(blocks, path.edges, uuid_block)
+    edge_bucket: dict[tuple[str, str], CfgEdge] = {}
+
+    for path_edge in path.edges:
+        src_block = uuid_block.get(path_edge.src_uuid)
+        dst_block = uuid_block.get(path_edge.dst_uuid)
+        if not src_block or not dst_block:
+            continue
+        key = (src_block.block_id, dst_block.block_id)
+        divergent = (
+            path_edge.kind == "branch"
+            or path_edge.tmask_changed
+            or is_branch_opcode(path_edge.opcode)
+        )
+        existing = edge_bucket.get(key)
+        if existing:
+            existing.weight += path_edge.weight
+            existing.divergent = existing.divergent or divergent
+            continue
+        edge_bucket[key] = CfgEdge(
+            src_block=src_block.block_id,
+            dst_block=dst_block.block_id,
+            weight=path_edge.weight,
+            divergent=divergent,
+            tmask_before=path_edge.tmask_before,
+            tmask_after=path_edge.tmask_after,
+        )
+
+    return WarpCfg(
+        warp_id=path.warp_id,
+        core_id=path.core_id,
+        blocks=blocks,
+        edges=list(edge_bucket.values()),
+    )
 
 
 def build_dynamic_cfg(
     parsed: ParsedTrace,
     pc_map_path: Path | None = None,
 ) -> DynamicCfg:
-    """TODO(M5): Full CFG with divergence / reconvergence annotations."""
-    raise NotImplementedError("build_dynamic_cfg is a stub — implement in M5")
+    symbols: list[SymbolEntry] | None = None
+    if pc_map_path:
+        symbols = load_pc_map_json(pc_map_path)
+
+    paths = build_warp_paths(parsed)
+    block_map, uuid_maps = build_basic_blocks(parsed, symbols)
+    path_by_key = {(p.core_id, p.warp_id): p for p in paths}
+
+    warps: list[WarpCfg] = []
+    for key, blocks in sorted(block_map.items()):
+        if not blocks:
+            continue
+        path = path_by_key.get(key)
+        if path:
+            warps.append(build_warp_cfg(path, blocks, uuid_maps[key]))
+        else:
+            warps.append(WarpCfg(warp_id=key[1], core_id=key[0], blocks=blocks, edges=[]))
+
+    return DynamicCfg(
+        warps=warps,
+        metadata={
+            "event_count": len(parsed.events),
+            "warp_count": len(warps),
+        },
+    )
 
 
 def write_cfg(cfg: DynamicCfg, out_path: Path) -> None:
@@ -200,12 +351,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build warp paths or dynamic CFG from trace.")
     parser.add_argument("input", type=Path, help="events.json or run.log")
     parser.add_argument("-o", "--output", type=Path, default=Path("warp_paths.json"))
-    parser.add_argument(
-        "--paths-only",
-        action="store_true",
-        default=True,
-        help="Emit warp_paths.json (M3, default)",
-    )
+    parser.add_argument("--paths-only", action="store_true", help="Emit warp_paths.json (M3)")
     parser.add_argument("--cfg", action="store_true", help="Emit full cfg.json (M5)")
     parser.add_argument("--pc-map", type=Path, default=None, help="Optional pc_map.json (M5)")
     args = parser.parse_args()

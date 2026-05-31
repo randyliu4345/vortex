@@ -18,7 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from build_cfg import build_warp_paths, is_fallthrough  # noqa: E402
+from build_cfg import (  # noqa: E402
+    build_basic_blocks_for_warp,
+    build_dynamic_cfg,
+    build_warp_paths,
+    is_fallthrough,
+)
 from parse_simx import parse_simx_log  # noqa: E402
 
 
@@ -44,6 +49,24 @@ class TestBuildCfg(unittest.TestCase):
         self.assertEqual(edge.dst_pc, "0x80000010")
         self.assertEqual(edge.kind, "branch")
         self.assertTrue(edge.tmask_changed)
+
+    def test_build_basic_blocks_fixture(self):
+        parsed = parse_simx_log(FIXTURE)
+        events = [e for e in parsed.events if e.warp_id == 0]
+        blocks, _ = build_basic_blocks_for_warp(events, 0, 0)
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].start_pc, "0x80000000")
+        self.assertEqual(blocks[0].end_pc, "0x80000000")
+        self.assertEqual(blocks[1].start_pc, "0x80000010")
+
+    def test_build_dynamic_cfg_fixture(self):
+        parsed = parse_simx_log(FIXTURE)
+        cfg = build_dynamic_cfg(parsed)
+        self.assertEqual(len(cfg.warps), 2)
+        w0 = next(w for w in cfg.warps if w.warp_id == 0)
+        self.assertEqual(len(w0.blocks), 2)
+        self.assertEqual(len(w0.edges), 1)
+        self.assertTrue(w0.edges[0].divergent)
 
 
 if __name__ == "__main__":

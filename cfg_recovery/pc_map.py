@@ -157,6 +157,11 @@ def write_pc_map(pc_map: PcMap, out_path: Path) -> None:
     out_path.write_text(json.dumps(asdict(pc_map), indent=2))
 
 
+def load_pc_map_json(path: Path) -> list[SymbolEntry]:
+    data = json.loads(path.read_text())
+    return [SymbolEntry(**item) for item in data["symbols"]]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build PC symbol map from kernel ELF.")
     parser.add_argument("elf", type=Path, help="Path to kernel .elf or binary")
