@@ -6,7 +6,7 @@ Recover **dynamic control-flow graphs** from Vortex **SimX** debug traces: basic
 **Artifacts (generated):** `build/cfg_recovery/` after `../configure`  
 **Pipeline:** `cfg_recovery/run.sh` (writes under `build/cfg_recovery/out/`)
 
-**Status:** Wave 1 complete (M1 `parse_simx.py`, M2 `pc_map.py`). M0 trace captured under `build/cfg_recovery/`.
+**Status:** Wave 2 complete (M3 warp paths, Graphviz export). Wave 3: M4–M5 basic blocks + full CFG.
 
 ```sh
 # Unit tests (from repo root)
