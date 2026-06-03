@@ -2,7 +2,8 @@
 
 Recover control-flow graphs from SimX debug traces of GPU kernels (warp-aware, with divergence annotations).
 
-**Documentation:** [docs/cfg_recovery.md](../docs/cfg_recovery.md)
+**Documentation:** [docs/cfg_recovery.md](../docs/cfg_recovery.md)  
+**Presentation:** [slides template](../docs/cfg_recovery_presentation.md) · [5 min demo script](../docs/cfg_recovery_demo_script.md)
 
 ## Layout
 
